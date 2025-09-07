@@ -1,5 +1,5 @@
 # The Project
-- Use CLIP and Vmamba to dinstillate a model
+- Use CLIP and Vmamba to distillate a model
 - Evaluate MAE Student vs Standard Student
 - Use different masking in the Teacher and Student models to improve generalization
 
@@ -45,10 +45,12 @@ StudentMAE
    ```
 
 2. Install the required packages:
-   Download CUDA 12.9 at [text](https://developer.nvidia.com/cuda-12-9-0-download-archive)
+
+   Download CUDA 12.9 [here](https://developer.nvidia.com/cuda-12-9-0-download-archive)
    ```
+   python -m venv .venv
    pip install -r requirements.txt
-   pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu129
+   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu129
    ```
 
 3. Prepare your dataset and place it in the `data/` directory.
