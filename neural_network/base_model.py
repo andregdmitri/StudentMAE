@@ -2,9 +2,10 @@ from pytorch_lightning import LightningModule
 import torch
 import torch.nn.functional as F
 
-class BaseClassificationModel(LightningModule):
+class BaseClassifier(LightningModule):
     def __init__(self, input_dim, output_dim, learning_rate=0.001):
-        super(BaseClassificationModel, self).__init__()
+        super().__init__()
+        self.save_hyperparameters()
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.learning_rate = learning_rate
@@ -15,7 +16,7 @@ class BaseClassificationModel(LightningModule):
             torch.nn.ReLU(),
             torch.nn.Linear(128, self.output_dim)
         )
-
+    
     def forward(self, x):
         return self.model(x)
 

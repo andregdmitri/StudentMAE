@@ -11,6 +11,7 @@ StudentMAE
 │   └── base_model.py
 ├── data
 ├── utils
+│   ├── dataloader.py
 │   ├── logger.py
 │   └── metrics.py
 ├── config
@@ -40,7 +41,7 @@ StudentMAE
 
 1. Clone the repository:
    ```
-   git clone <repository-url>
+   git clone https://github.com/andregdmitri/StudentMAE.git
    cd studentMAE
    ```
 

@@ -22,7 +22,7 @@ def evaluate_student_with_mae(model_path, data_loader):
     logger = Logger()
 
     all_predictions = []
-    all_labels = []
+    all_labels = [] 
 
     with torch.no_grad():
         for batch in data_loader:
