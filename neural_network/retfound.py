@@ -6,13 +6,13 @@ from util.pos_embed import interpolate_pos_embed
 from base_model import BaseClassifier
 
 class RETFoundClassifier(BaseClassifier):
-    def __init__(self, output_dim, checkpoint_path, learning_rate=1e-4, drop_path_rate=0.2):
+    def __init__(self, num_classes, checkpoint_path, learning_rate=1e-4, drop_path_rate=0.2):
         # We don't really need input_dim here, so just pass None
-        super().__init__(input_dim=None, output_dim=output_dim, learning_rate=learning_rate)
+        super().__init__(input_dim=None, num_classes=num_classes, learning_rate=learning_rate)
 
         # RETFound has this ViT backbone
         self.model = models_vit.__dict__['vit_large_patch16'](
-            num_classes=output_dim,
+            num_classes=num_classes,
             drop_path_rate=drop_path_rate,
             global_pool=True,
         )

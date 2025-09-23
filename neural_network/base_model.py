@@ -3,18 +3,18 @@ import torch
 import torch.nn.functional as F
 
 class BaseClassifier(LightningModule):
-    def __init__(self, input_dim, output_dim, learning_rate=0.001):
+    def __init__(self, input_dim, num_classes, learning_rate=0.001):
         super().__init__()
         self.save_hyperparameters()
         self.input_dim = input_dim
-        self.output_dim = output_dim
+        self.num_classes = num_classes
         self.learning_rate = learning_rate
         
         # Define the model architecture
         self.model = torch.nn.Sequential(
             torch.nn.Linear(self.input_dim, 128),
             torch.nn.ReLU(),
-            torch.nn.Linear(128, self.output_dim)
+            torch.nn.Linear(128, self.num_classes)
         )
     
     def forward(self, x):
