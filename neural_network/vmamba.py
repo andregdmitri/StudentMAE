@@ -3,7 +3,7 @@ import torch.nn as nn
 from mamba_ssm import Mamba
 
 # Import the BaseClassifier from your file
-from base_model import BaseClassifier
+from .base_model import BaseClassifier
 
 class VisualMamba(BaseClassifier):
     def __init__(

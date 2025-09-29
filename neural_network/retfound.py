@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 from timm.models.layers import trunc_normal_
-import models_vit  # from RETFound repo
-from util.pos_embed import interpolate_pos_embed
-from base_model import BaseClassifier
+from . import models_vit  # from RETFound repo
+from utils.pos_embed import interpolate_pos_embed
+from .base_model import BaseClassifier
 
 class RETFoundClassifier(BaseClassifier):
     def __init__(self, num_classes, checkpoint_path, learning_rate=1e-4, drop_path_rate=0.2):

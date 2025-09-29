@@ -11,13 +11,18 @@ class BaseClassifier(LightningModule):
         self.learning_rate = learning_rate
         
         # Define the model architecture
-        self.model = torch.nn.Sequential(
-            torch.nn.Linear(self.input_dim, 128),
-            torch.nn.ReLU(),
-            torch.nn.Linear(128, self.num_classes)
-        )
+        if input_dim is not None:
+            self.model = torch.nn.Sequential(
+                torch.nn.Linear(self.input_dim, 128),
+                torch.nn.ReLU(),
+                torch.nn.Linear(128, self.num_classes)
+            )
+        else:
+            self.model = None
     
     def forward(self, x):
+        if self.model is None:
+            raise NotImplementedError("Child class must define its own forward pass")
         return self.model(x)
 
     def training_step(self, batch, batch_idx):
