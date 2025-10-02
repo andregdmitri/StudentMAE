@@ -15,6 +15,7 @@ class VisualMamba(BaseClassifier):
         embed_dim: int = 192,
         depth: int = 24,
         learning_rate: float = 0.001,
+        mask_ratio: float = 0.0,
         **mamba_kwargs,
     ):
         # The BaseClassifier's `input_dim` isn't directly used by this new model's
@@ -30,6 +31,9 @@ class VisualMamba(BaseClassifier):
         self.patch_embed = nn.Conv2d(
             in_chans, embed_dim, kernel_size=patch_size, stride=patch_size
         )
+
+        self.mask_ratio = mask_ratio
+        self.mask_token = None # incomplete
 
         # 2. Mamba Backbone
         # A sequence of Mamba blocks to process the patch embeddings.
@@ -72,6 +76,10 @@ class VisualMamba(BaseClassifier):
         # Flatten the spatial dimensions and permute for sequence processing
         # (B, D, H/P, W/P) -> (B, D, N) -> (B, N, D) where N is the number of patches
         x = x.flatten(2).transpose(1, 2)
+
+        mask = None
+        if self.mask_ratio > 0.0:
+            x, mask = self.apply_mask(x)  # (B, N, D), (B, N)
         
         # Process the sequence through the Mamba backbone
         # (B, N, D) -> (B, N, D)
