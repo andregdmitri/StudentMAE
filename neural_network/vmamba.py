@@ -45,6 +45,26 @@ class VisualMamba(BaseClassifier):
         self.norm = nn.LayerNorm(embed_dim)
         self.head = nn.Linear(embed_dim, num_classes)
 
+    def apply_mask(self, x: torch.Tensor):
+      B, N, D = x.shape
+      num_mask = int(N * self.mask_ratio)
+
+      noise = torch.rand(B, N, device=x.device)
+      ids_shuffle = torch.argsort(noise, dim=1)
+      ids_restore = torch.argsort(ids_shuffle, dim=1)
+
+      mask = torch.ones(B, N, device=x.device)
+      mask[:, :num_mask] = 0
+      mask = torch.gather(mask, dim=1, index=ids_restore)
+
+      if self.mask_token is not None:
+        mask_tokens = self.mask_token.expand(B, N, D)
+        x = x * mask.unsqueeze(-1) + (1 - mask).unsqueeze(-1) * mask_tokens
+      else:
+        x = x * mask.unsqueeze(-1)
+
+      return x, mask
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # (B, C, H, W) -> (B, D, H/P, W/P)
         x = self.patch_embed(x)
