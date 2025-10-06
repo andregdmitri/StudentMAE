@@ -23,7 +23,7 @@ class VisionTransformer(timm.models.vision_transformer.VisionTransformer):
             embed_dim = kwargs['embed_dim']
             self.fc_norm = norm_layer(embed_dim)
 
-            del self.norm  # remove the original norm
+            self.norm = nn.Identity() 
 
     def forward_features(self, x):
         B = x.shape[0]
