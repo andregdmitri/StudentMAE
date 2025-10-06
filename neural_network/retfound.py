@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from timm.models.layers import trunc_normal_
+from timm.layers import trunc_normal_
 from . import models_vit  # from RETFound repo
 from utils.pos_embed import interpolate_pos_embed
 from .base_model import BaseClassifier
@@ -18,7 +18,7 @@ class RETFoundClassifier(BaseClassifier):
         )
 
         # Load checkpoint
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        checkpoint = torch.load(checkpoint_path, weights_only=False, map_location='cpu')
         checkpoint_model = checkpoint['model']
         state_dict = self.model.state_dict()
 
