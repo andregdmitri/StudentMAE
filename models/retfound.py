@@ -1,14 +1,16 @@
 import torch
 import torch.nn as nn
 from timm.layers import trunc_normal_
+
+from config.constants import *
 from . import models_vit  # from RETFound repo
 from utils.pos_embed import interpolate_pos_embed
 from .base_model import BaseClassifier
 
 class RETFoundClassifier(BaseClassifier):
-    def __init__(self, num_classes, checkpoint_path, learning_rate=1e-4, drop_path_rate=0.2):
+    def __init__(self, num_classes=NUM_CLASSES, checkpoint_path=os.path.join(CHECKPOINT_DIR, "RETFound_cfp_weights.pth"), learning_rate=LEARNING_RATE, drop_path_rate=0.2):
         # We don't really need input_dim here, so just pass None
-        super().__init__(input_dim=None, num_classes=num_classes, learning_rate=learning_rate)
+        super().__init__(input_dim=None, num_classes=NUM_CLASSES, learning_rate=LEARNING_RATE)
 
         # RETFound has this ViT backbone
         self.model = models_vit.__dict__['vit_large_patch16'](

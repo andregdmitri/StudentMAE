@@ -3,10 +3,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
-# Import correct model classes
-from neural_network.retfound import RETFoundClassifier  # Teacher
-from neural_network.vmamba import VisualMamba          # Student
+from models.retfound import RETFoundClassifier 
+from models.vmamba import VisualMamba
 
 # Dummy dataset class (replace with your actual dataset)
 class EmbeddingDataset(torch.utils.data.Dataset):

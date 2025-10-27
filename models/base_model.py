@@ -2,23 +2,22 @@ from pytorch_lightning import LightningModule
 import torch
 import torch.nn.functional as F
 
+from config.constants import *
+
 class BaseClassifier(LightningModule):
-    def __init__(self, input_dim, num_classes, learning_rate=0.001):
+    def __init__(self, 
+                 input_dim=INPUT_DIM, 
+                 num_classes=NUM_CLASSES, 
+                 learning_rate=LEARNING_RATE
+                 ):
         super().__init__()
-        self.save_hyperparameters()
         self.input_dim = input_dim
         self.num_classes = num_classes
         self.learning_rate = learning_rate
+        self.save_hyperparameters()
         
-        # Define the model architecture
-        if input_dim is not None:
-            self.model = torch.nn.Sequential(
-                torch.nn.Linear(self.input_dim, 128),
-                torch.nn.ReLU(),
-                torch.nn.Linear(128, self.num_classes)
-            )
-        else:
-            self.model = None
+        # Must be implemented by subclass
+        self.model = None
     
     def forward(self, x):
         if self.model is None:
@@ -29,18 +28,18 @@ class BaseClassifier(LightningModule):
         x, y = batch
         y_hat = self(x)
         loss = F.cross_entropy(y_hat, y)
-        self.log('train_loss', loss)
+        self.log('train_loss', loss, on_epoch=True, logger=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
         y_hat = self(x)
         loss = F.cross_entropy(y_hat, y)
-        self.log('val_loss', loss)
+        self.log('val_loss', loss, on_epoch=True, logger=True)
         
         preds = torch.argmax(y_hat, dim=1)
         acc = (preds == y).float().mean()
-        self.log('val_acc', acc)
+        self.log('val_acc', acc, on_epoch=True, logger=True)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
