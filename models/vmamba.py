@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 from mamba_ssm import Mamba
+from config.constants import *
+
 
 # Import the BaseClassifier from your file
 from .base_model import BaseClassifier
@@ -11,11 +13,13 @@ class VisualMamba(BaseClassifier):
         img_size: int = 224,
         patch_size: int = 16,
         in_chans: int = 3,
-        num_classes: int = 10,
-        embed_dim: int = 192,
-        depth: int = 24,
-        learning_rate: float = 0.001,
-        mask_ratio: float = 0.0,
+        num_classes: int = NUM_CLASSES,
+        embed_dim: int = 192,     # D
+        depth: int = 24,          # L
+        ssm_dim: int = 16,        # N
+        expand_dim: int = 2,      # E
+        learning_rate: float = LEARNING_RATE,
+        variant: str = "tiny",    # "tiny" or "small"
         **mamba_kwargs,
     ):
         # The BaseClassifier's `input_dim` isn't directly used by this new model's
@@ -25,6 +29,7 @@ class VisualMamba(BaseClassifier):
         # This is a PyTorch Lightning convention to save hyperparameters.
         self.save_hyperparameters()
 
+
         # 1. Patch Embedding Layer
         # This layer converts an image into a sequence of flattened patch embeddings.
         # For example, a 224x224 image with 16x16 patches becomes 14x14 = 196 patches.
@@ -32,14 +37,16 @@ class VisualMamba(BaseClassifier):
             in_chans, embed_dim, kernel_size=patch_size, stride=patch_size
         )
 
-        self.mask_ratio = mask_ratio
-        self.mask_token = None # incomplete
-
-        # 2. Mamba Backbone
+        # 2. Mamba Backbone (L blocks)
         # A sequence of Mamba blocks to process the patch embeddings.
         self.backbone = nn.Sequential(
             *[
-                Mamba(d_model=embed_dim, **mamba_kwargs)
+                Mamba(
+                    d_model=embed_dim,   # D
+                    d_state=ssm_dim,     # N
+                    expand=expand_dim,   # E
+                    **mamba_kwargs
+                )
                 for _ in range(depth)
             ]
         )
@@ -49,25 +56,25 @@ class VisualMamba(BaseClassifier):
         self.norm = nn.LayerNorm(embed_dim)
         self.head = nn.Linear(embed_dim, num_classes)
 
-    def apply_mask(self, x: torch.Tensor):
-      B, N, D = x.shape
-      num_mask = int(N * self.mask_ratio)
+    # def apply_mask(self, x: torch.Tensor):
+    #   B, N, D = x.shape
+    #   num_mask = int(N * self.mask_ratio)
 
-      noise = torch.rand(B, N, device=x.device)
-      ids_shuffle = torch.argsort(noise, dim=1)
-      ids_restore = torch.argsort(ids_shuffle, dim=1)
+    #   noise = torch.rand(B, N, device=x.device)
+    #   ids_shuffle = torch.argsort(noise, dim=1)
+    #   ids_restore = torch.argsort(ids_shuffle, dim=1)
 
-      mask = torch.ones(B, N, device=x.device)
-      mask[:, :num_mask] = 0
-      mask = torch.gather(mask, dim=1, index=ids_restore)
+    #   mask = torch.ones(B, N, device=x.device)
+    #   mask[:, :num_mask] = 0
+    #   mask = torch.gather(mask, dim=1, index=ids_restore)
 
-      if self.mask_token is not None:
-        mask_tokens = self.mask_token.expand(B, N, D)
-        x = x * mask.unsqueeze(-1) + (1 - mask).unsqueeze(-1) * mask_tokens
-      else:
-        x = x * mask.unsqueeze(-1)
+    #   if self.mask_token is not None:
+    #     mask_tokens = self.mask_token.expand(B, N, D)
+    #     x = x * mask.unsqueeze(-1) + (1 - mask).unsqueeze(-1) * mask_tokens
+    #   else:
+    #     x = x * mask.unsqueeze(-1)
 
-      return x, mask
+    #   return x, mask
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # (B, C, H, W) -> (B, D, H/P, W/P)
@@ -77,9 +84,9 @@ class VisualMamba(BaseClassifier):
         # (B, D, H/P, W/P) -> (B, D, N) -> (B, N, D) where N is the number of patches
         x = x.flatten(2).transpose(1, 2)
 
-        mask = None
-        if self.mask_ratio > 0.0:
-            x, mask = self.apply_mask(x)  # (B, N, D), (B, N)
+        # mask = None
+        # if self.mask_ratio > 0.0:
+        #     x, mask = self.apply_mask(x)  # (B, N, D), (B, N)
         
         # Process the sequence through the Mamba backbone
         # (B, N, D) -> (B, N, D)
