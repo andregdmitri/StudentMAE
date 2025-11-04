@@ -42,3 +42,6 @@ class RETFoundClassifier(BaseClassifier):
 
     def forward(self, x):
         return self.model(x)
+    
+    def forward_features(self, x):
+        return self.model.forward_features(x)

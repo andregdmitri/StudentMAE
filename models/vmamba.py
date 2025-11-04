@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from mamba_ssm import Mamba
 from config.constants import *
-
+import torch.nn.functional as F
 
 # Import the BaseClassifier from your file
 from .base_model import BaseClassifier
@@ -51,32 +51,20 @@ class VisualMamba(BaseClassifier):
             ]
         )
 
-        # 3. Classification Head
+        # 3. Classification Headed
         # A normalization layer and a linear layer to produce the final logits.
         self.norm = nn.LayerNorm(embed_dim)
-        self.head = nn.Linear(embed_dim, num_classes)
+        self.heads = nn.ModuleDict(
+            {
+                "microaneurysms": nn.Linear(embed_dim, 1),
+                "haemorrhages": nn.Linear(embed_dim, 1),
+                "hard_exudates": nn.Linear(embed_dim, 1),
+                "soft_exudates": nn.Linear(embed_dim, 1),
+                "optic_disc": nn.Linear(embed_dim, 1),
+            }
+        )
 
-    # def apply_mask(self, x: torch.Tensor):
-    #   B, N, D = x.shape
-    #   num_mask = int(N * self.mask_ratio)
-
-    #   noise = torch.rand(B, N, device=x.device)
-    #   ids_shuffle = torch.argsort(noise, dim=1)
-    #   ids_restore = torch.argsort(ids_shuffle, dim=1)
-
-    #   mask = torch.ones(B, N, device=x.device)
-    #   mask[:, :num_mask] = 0
-    #   mask = torch.gather(mask, dim=1, index=ids_restore)
-
-    #   if self.mask_token is not None:
-    #     mask_tokens = self.mask_token.expand(B, N, D)
-    #     x = x * mask.unsqueeze(-1) + (1 - mask).unsqueeze(-1) * mask_tokens
-    #   else:
-    #     x = x * mask.unsqueeze(-1)
-
-    #   return x, mask
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
         # (B, C, H, W) -> (B, D, H/P, W/P)
         x = self.patch_embed(x)
         
@@ -99,6 +87,10 @@ class VisualMamba(BaseClassifier):
         # Pass through the classification head to get logits
         # (B, D) -> (B, D) -> (B, num_classes)
         x = self.norm(x)
-        x = self.head(x)
+        # x = self.head(x)
         
         return x
+    
+    def forward(self, x):
+        feats = self.forward_features(x)
+        return {k: head(feats) for k, head in self.heads.items()}
