@@ -39,30 +39,28 @@ def get_student_backbone_params(student):
 # Phase 1: foundation distillation
 # -------------------------------
 def distill_embeddings(teacher, student, projector, dataloader, device, epochs=10, lr=1e-4):
-    criterion = nn.MSELoss()
+    criterion = nn.CosineEmbeddingLoss()
 
     optimizer = torch.optim.Adam(
-        list(get_student_backbone_params(student)) +
-        list(projector.parameters()),
+        list(get_student_backbone_params(student)) + list(projector.parameters()),
         lr=lr
     )
 
-    # freeze heads:
-    for p in student.heads.parameters():
-        p.requires_grad_(False)
+    teacher.eval()
 
     for epoch in range(epochs):
         epoch_loss = 0.
 
-        for batch in dataloader:
-            batch = batch.to(device)
+        for x, _ in dataloader:
+            x = x.to(device)
 
             with torch.no_grad():
-                t = get_teacher_embedding(teacher, batch)  # [B,D_teacher]
+                t = get_teacher_embedding(teacher, x)    # [B,1024]
 
-            s = projector(get_student_embedding(student, batch))         # [B,D_teacher]
+            s = projector(get_student_embedding(student, x))  # [B,1024]
 
-            loss = criterion(s, t)
+            target = torch.ones(s.size(0)).to(device)
+            loss = criterion(s, t, target)
 
             optimizer.zero_grad()
             loss.backward()
@@ -74,44 +72,31 @@ def distill_embeddings(teacher, student, projector, dataloader, device, epochs=1
 
 
 # -------------------------------------
-# Phase 2: train heads w/ real labels
+# Phase 2: train head w/ real labels
 # -------------------------------------
-def train_heads(student, dataloader, device, epochs=10, lr=1e-4):
-    """
-    student : VisualMamba (already distilled)
-    dataloader : should return (x, y_dict)
-    """
+def train_head(student, dataloader, device, epochs=10, lr=1e-4):
 
-    # freeze backbone:
+    # freeze backbone params
     for p in get_student_backbone_params(student):
         p.requires_grad_(False)
 
-    # unfreeze heads:
-    for p in student.heads.parameters():
+    # unfreeze classifier head
+    for p in student.head.parameters():
         p.requires_grad_(True)
 
-    optimizer = torch.optim.Adam(
-        student.heads.parameters(),
-        lr=lr
-    )
+    optimizer = torch.optim.Adam(student.head.parameters(), lr=lr)
 
-    student.train()
-
-    bce = nn.BCEWithLogitsLoss()
+    ce = nn.CrossEntropyLoss()
 
     for epoch in range(epochs):
         epoch_loss = 0.
 
-        for x, y_dict in dataloader:
+        for x, y in dataloader:
             x = x.to(device)
-            for k in y_dict:
-                y_dict[k] = y_dict[k].to(device).float().view(-1,1)
+            y = y.to(device).long()         # [B]
 
-            out = student(x)       # dict[task: logits]
-
-            loss = 0.
-            for task, logits in out.items():
-                loss += bce(logits, y_dict[task])
+            logits = student(x)             # [B,5]
+            loss = ce(logits, y)
 
             optimizer.zero_grad()
             loss.backward()
@@ -119,4 +104,4 @@ def train_heads(student, dataloader, device, epochs=10, lr=1e-4):
 
             epoch_loss += loss.item()
 
-        print(f"[Heads] epoch {epoch+1}  loss={epoch_loss/len(dataloader):.6f}")
+        print(f"[Head] epoch {epoch+1}  loss={epoch_loss/len(dataloader):.6f}")
