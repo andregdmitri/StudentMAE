@@ -144,7 +144,7 @@ def run_head_training(args):
         devices=1,
         logger=logger,
         precision="16-mixed" if torch.cuda.is_available() else 32,
-        log_every_n_steps=4,
+        log_every_n_steps=50,
     )
 
     # ------------------------------

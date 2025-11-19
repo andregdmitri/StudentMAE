@@ -67,7 +67,7 @@ def run_distillation(args):
         monitor="val/loss",
         mode="min",
         save_top_k=1,
-        filename="best_distillation-{epoch:02d}-{val/loss:.4f}",
+        filename="best_distillation",
     )
 
     trainer = pl.Trainer(
@@ -76,7 +76,7 @@ def run_distillation(args):
         devices=1 if torch.cuda.is_available() else None,
         logger=logger,
         precision="16-mixed" if torch.cuda.is_available() else 32,
-        log_every_n_steps=4,
+        log_every_n_steps=50,
         callbacks=[checkpoint_callback],
     )
 

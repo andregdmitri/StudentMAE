@@ -151,7 +151,7 @@ def run_evaluation(args):
         devices=1,
         logger=logger,
         precision="16-mixed" if torch.cuda.is_available() else 32,
-        log_every_n_steps=5,
+        log_every_n_steps=50,
     )
 
     print("\n=== Running Evaluation ===")
