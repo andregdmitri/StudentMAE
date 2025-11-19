@@ -7,6 +7,7 @@ import pandas as pd
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
+from config.constants import BATCH_SIZE, NUM_WORKERS
 
 
 class IDRiDDataset(Dataset):
@@ -64,7 +65,7 @@ class IDRiDDataset(Dataset):
 
 
 class IDRiDModule(pl.LightningDataModule):
-    def __init__(self, root, batch_size=16, num_workers=4, transform=None):
+    def __init__(self, root, batch_size=BATCH_SIZE, num_workers=NUM_WORKERS, transform=None):
         super().__init__()
         self.root = root
         self.batch_size=batch_size
@@ -76,9 +77,21 @@ class IDRiDModule(pl.LightningDataModule):
         self.val   = IDRiDDataset(self.root, "test",  self.transform)
 
     def train_dataloader(self):
-        return DataLoader(self.train, batch_size=self.batch_size, shuffle=True,
-                          num_workers=self.num_workers)
+        return DataLoader(
+            self.train,
+            batch_size=self.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            persistent_workers=True,
+            num_workers=self.num_workers
+        )
 
     def val_dataloader(self):
-        return DataLoader(self.val, batch_size=self.batch_size, shuffle=False,
-                          num_workers=self.num_workers)
+        return DataLoader(
+            self.val,
+            batch_size=self.batch_size,
+            shuffle=False,
+            pin_memory=True,
+            persistent_workers=True,
+            num_workers=self.num_workers
+        )
