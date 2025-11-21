@@ -50,13 +50,45 @@ class DistillationModule(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         x, y = batch
 
-        # ---------- Teacher forward ----------
+        # ---------- Student forward WITH MASK ----------
+        # student returns pooled features only, so we use return_pooled=False to get sequence
         with torch.no_grad():
-            t = self.teacher.forward_features(x)        # (B, Tdim)
+            # Apply masking to student patch embeddings
+            s_seq, mask, ids_keep, ids_restore = self.student.forward_features(
+                x, return_pooled=False, apply_mask=True
+            )  # s_seq: (B, N_visible, D)
 
-        # ---------- Student forward ----------
-        # IMPORTANT: Use student masking if student.mask_ratio > 0
-        s = self.student.forward_features(x, apply_mask=True)   # (B, Sdim)
+        # PROBLEM: s_seq is backbone output, but we need raw patch embeddings BEFORE backbone to align with teacher
+        # → So modify student.forward_features to optionally return x BEFORE cls-head. But easier patch:
+        # Let's run patch_embed & mask manually:
+
+        # ====== STUDENT RAW PATCHES (before backbone) ======
+        patch = self.student.patch_embed(x)                     # (B, D, H/P, W/P)
+        patch = patch.flatten(2).transpose(1, 2)                # (B, N, D)
+        patch_keep = torch.gather(
+            patch, dim=1,
+            index=ids_keep.unsqueeze(-1).expand(-1, -1, patch.size(-1))
+        )                                                       # (B, N_visible, D)
+
+        # ====== PASS MASKED PATCHES THROUGH STUDENT BACKBONE ======
+        s_seq = self.student.backbone(patch_keep)
+        s_seq = self.student.norm(s_seq)
+        s = s_seq.mean(dim=1)                                   # pooled student features
+
+        # ---------- Teacher forward (FULL sequence) ----------
+        with torch.no_grad():
+            t_full = self.teacher.model.forward_features(x, return_all_tokens=True)
+            # t_full shape: (B, N, D_teacher)
+
+            # Gather teacher tokens according to student visible tokens
+            t_visible = torch.gather(
+                t_full,
+                dim=1,
+                index=ids_keep.unsqueeze(-1).expand(-1, -1, t_full.size(-1)),
+            )
+            t = t_visible.mean(dim=1)  # pooled teacher features
+
+        # ---------- Distillation loss ----------
         s_proj = self.projector(s)
 
         # ---------- Distillation Loss ----------
