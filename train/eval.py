@@ -14,8 +14,7 @@ from dataloader.idrid import IDRiDModule
 
 class EvalWrapper(pl.LightningModule):
     """
-    Wraps a pretrained VisualMamba backbone + classifier head
-    to compute metrics during evaluation.
+    Wraps backbone + head to compute evaluation metrics.
     """
 
     def __init__(self, backbone, head):
@@ -39,15 +38,16 @@ class EvalWrapper(pl.LightningModule):
         x, y = batch
         logits = self(x)
         probs = torch.softmax(logits, dim=1)
+        preds = torch.argmax(probs, dim=1)
 
-        # update metrics
-        self.acc.update(probs, y)
-        self.f1.update(probs, y)
+        # CORRECT
+        self.acc.update(preds, y)
+        self.f1.update(preds, y)
+
         self.auroc.update(probs, y)
         self.aupr.update(probs, y)
 
     def on_validation_epoch_end(self):
-        # compute
         acc = self.acc.compute()
         f1 = self.f1.compute()
 
@@ -61,7 +61,6 @@ class EvalWrapper(pl.LightningModule):
         except:
             aupr = torch.tensor(float("nan"))
 
-        # log
         self.log("eval/acc", acc)
         self.log("eval/f1", f1)
         self.log("eval/auroc", auroc)
@@ -73,7 +72,6 @@ class EvalWrapper(pl.LightningModule):
         print(f"AUROC:    {auroc:.4f}")
         print(f"AUPR:     {aupr:.4f}")
 
-        # reset for next run
         self.acc.reset()
         self.f1.reset()
         self.auroc.reset()
@@ -84,14 +82,14 @@ def run_evaluation(args):
     pl.seed_everything(42)
 
     if args.load_model is None:
-        raise ValueError("--load_model is required for --run eval")
+        raise ValueError("--load_model is required for evaluation")
 
     print(f"\n=== Loading model checkpoint ===\n{args.load_model}")
 
     ckpt = torch.load(args.load_model, map_location="cpu")
 
     # ------------------------------
-    # 1. Build backbone
+    # Build backbone
     # ------------------------------
     backbone = VisualMamba(
         img_size=IMG_SIZE,
@@ -103,24 +101,24 @@ def run_evaluation(args):
         mask_ratio=0.0,
     )
 
-    # load backbone weights
     if "backbone" in ckpt:
         backbone.load_state_dict(ckpt["backbone"])
     else:
         backbone.load_state_dict(ckpt, strict=False)
 
     # ------------------------------
-    # 2. Build classifier head
+    # Build classifier head
     # ------------------------------
     head = nn.Linear(backbone.embed_dim, NUM_CLASSES)
 
     if "head" in ckpt:
         head.load_state_dict(ckpt["head"])
     else:
-        print("WARNING: No head weights found in checkpoint — randomly initialized head!")
+        print("WARNING: No head found — random head!")
+    head.eval()
 
     # ------------------------------
-    # 3. Data
+    # Data
     # ------------------------------
     tfm = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
@@ -133,25 +131,15 @@ def run_evaluation(args):
     )
     dm.setup()
 
-    # ------------------------------
-    # 4. WandB Logger
-    # ------------------------------
-    logger = WandbLogger(project="vmamba_eval", log_model=False)
+    logger = WandbLogger(project="vmamba_eval")
 
-    # ------------------------------
-    # 5. Evaluation module
-    # ------------------------------
     model = EvalWrapper(backbone, head)
 
-    # ------------------------------
-    # 6. Trainer
-    # ------------------------------
     trainer = pl.Trainer(
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
         logger=logger,
         precision="16-mixed" if torch.cuda.is_available() else 32,
-        log_every_n_steps=50,
     )
 
     print("\n=== Running Evaluation ===")

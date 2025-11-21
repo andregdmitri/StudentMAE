@@ -68,12 +68,9 @@ class VisualMamba(nn.Module):
         # 3. Classification Headed
         # A normalization layer and a linear layer to produce the final logits.
         self.norm = nn.LayerNorm(embed_dim)
-        self.head = nn.Linear(embed_dim, num_classes)
-        if mask_ratio > 0:
-            self.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-            nn.init.normal_(self.mask_token, std=0.02)
-        else:
-            self.mask_token = None
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        nn.init.normal_(self.mask_token, std=0.02)
+
 
     def apply_mask(self, x: torch.Tensor, mask_ratio: Optional[float] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """MAE-style masking applied to sequence `x`.
@@ -89,37 +86,59 @@ class VisualMamba(nn.Module):
         """
         if mask_ratio is None:
             mask_ratio = self.mask_ratio
+
+        B, N, D = x.shape
+
         if mask_ratio <= 0.0:
-            B, N, D = x.shape
             mask = torch.ones(B, N, device=x.device)
             ids_keep = torch.arange(N, device=x.device).unsqueeze(0).expand(B, -1)
             ids_restore = ids_keep
             return x, mask, ids_keep, ids_restore
 
-        B, N, D = x.shape
-        num_mask = int(N * mask_ratio)
-        if num_mask < 1:
-            return x, torch.ones(B, N, device=x.device), torch.arange(N, device=x.device).unsqueeze(0).expand(B, -1), torch.arange(N, device=x.device).unsqueeze(0).expand(B, -1)
-
-        # generate per-sample random permutation
+        # -------------------------------
+        # 1. Random shuffle
+        # -------------------------------
         noise = torch.rand(B, N, device=x.device)
         ids_shuffle = torch.argsort(noise, dim=1)
         ids_restore = torch.argsort(ids_shuffle, dim=1)
 
-        ids_keep = ids_shuffle[:, num_mask:]
+        # -------------------------------
+        # 2. Split keep vs mask indices
+        # -------------------------------
+        num_mask = int(N * mask_ratio)
         ids_mask = ids_shuffle[:, :num_mask]
+        ids_keep = ids_shuffle[:, num_mask:]
 
-        # gather kept tokens
-        x_keep = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).expand(-1, -1, D))  # (B, N_visible, D)
+        # visible tokens
+        x_keep = torch.gather(
+            x, dim=1,
+            index=ids_keep.unsqueeze(-1).expand(-1, -1, D)
+        )
 
-        # optionally append mask tokens so student input size equals original N (MAE-style decoder required)
-        # For our distillation (student encoder), we usually keep only visible tokens.
+        # -------------------------------
+        # 3. Build binary mask (1=keep, 0=masked)
+        # -------------------------------
         mask = torch.ones(B, N, device=x.device)
-        mask[:, :num_mask] = 0
-        # restore mask to original ordering
-        mask = torch.gather(mask, dim=1, index=ids_restore)
+        mask.scatter_(1, ids_mask, 0)
 
-        return x_keep, mask, ids_keep, ids_restore
+        # -------------------------------
+        # 4. INSERT MASK TOKENS (MAE FIX)
+        # -------------------------------
+        mask_tokens = self.mask_token.expand(B, num_mask, D)
+
+        # MAE concatenation: [visible tokens | mask tokens]
+        x_combined = torch.cat([x_keep, mask_tokens], dim=1)
+
+        # -------------------------------
+        # 5. Restore original token order
+        # -------------------------------
+        x_full = torch.gather(
+            x_combined,
+            dim=1,
+            index=ids_restore.unsqueeze(-1).expand(-1, -1, D)
+        )
+
+        return x_full, mask, ids_keep, ids_restore
 
     def forward_features(self, img: torch.Tensor, return_pooled: bool = True, apply_mask: bool = False):
         """Return pooled features by default (B, D). If return_pooled=False returns sequence + mask info.
@@ -127,30 +146,45 @@ class VisualMamba(nn.Module):
         If apply_mask=True, uses self.apply_mask and returns x_keep + mask info.
         """
         # patch embed
-        x = self.patch_embed(img)  # (B, D, H/P, W/P)
-        x = x.flatten(2).transpose(1, 2)  # (B, N, D)
+        x = self.patch_embed(img)          # (B, D, H/P, W/P)
+        x = x.flatten(2).transpose(1, 2)    # (B, N, D)
 
+        # ---------------------------
+        # Apply proper MAE-style masking
+        # ---------------------------
         if apply_mask and self.mask_ratio > 0.0:
+            # now returns full-length masked sequence (B, N, D)
             x_seq, mask, ids_keep, ids_restore = self.apply_mask(x)
         else:
             x_seq = x
-            mask = None
-            ids_keep = None
-            ids_restore = None
+            mask, ids_keep, ids_restore = None, None, None
 
-        # pass through backbone
-        # note: backbone expects (B, N, D) -> returns (B, N, D)
-        x_seq = self.backbone(x_seq)
-
+        # ---------------------------
+        # Backbone expects (B, N, D)
+        # ---------------------------
+        x_seq = self.backbone(x_seq)       # (B, N, D)
         x_seq = self.norm(x_seq)
 
+        # ---------------------------
+        # Output pooled or full sequence
+        # ---------------------------
         if return_pooled:
-            x_pooled = x_seq.mean(dim=1)
-            return x_pooled
+
+            if apply_mask and ids_keep is not None:
+                # Pool only visible tokens (MAE style)
+                B, N, D = x_seq.shape
+                visible = torch.gather(
+                    x_seq,
+                    dim=1,
+                    index=ids_keep.unsqueeze(-1).expand(-1, -1, D)
+                )
+                return visible.mean(dim=1)
+
+            # Normal full-sequence pooling
+            return x_seq.mean(dim=1)
 
         return x_seq, mask, ids_keep, ids_restore
 
     def forward(self, x: torch.Tensor):
         # default: return pooled features for classifier compatibility
-        pooled = self.forward_features(x, return_pooled=True)
-        return pooled
+        return self.forward_features(x, return_pooled=True, apply_mask=False)

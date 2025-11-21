@@ -4,7 +4,8 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
-from torchmetrics import Accuracy, F1Score
+from torchmetrics import Accuracy, F1Score, AUROC, AveragePrecision
+
 from config.constants import *
 from models.vmamba_backbone import VisualMamba
 from dataloader.idrid import IDRiDModule
@@ -33,9 +34,11 @@ class HeadTrainer(pl.LightningModule):
 
         self.loss_fn = nn.CrossEntropyLoss()
 
-        # metrics
+        # -------- Metrics --------
         self.acc = Accuracy(task="multiclass", num_classes=NUM_CLASSES)
         self.f1 = F1Score(task="multiclass", num_classes=NUM_CLASSES, average="macro")
+        self.auroc = AUROC(task="multiclass", num_classes=NUM_CLASSES)
+        self.aupr = AveragePrecision(task="multiclass", num_classes=NUM_CLASSES)
 
     def forward(self, x):
         with torch.no_grad():
@@ -55,10 +58,15 @@ class HeadTrainer(pl.LightningModule):
         logits = self(x)
         loss = self.loss_fn(logits, y)
 
-        preds = torch.argmax(logits, dim=1)
+        probs = torch.softmax(logits, dim=1)
+        preds = torch.argmax(probs, dim=1)
 
+        # CORRECT
         self.acc.update(preds, y)
         self.f1.update(preds, y)
+
+        self.auroc.update(probs, y)
+        self.aupr.update(probs, y)
 
         self.log("val/loss", loss, prog_bar=True)
         return loss
@@ -67,11 +75,27 @@ class HeadTrainer(pl.LightningModule):
         acc = self.acc.compute()
         f1 = self.f1.compute()
 
+        # multiclass AUROC/AUPR can throw if class missing → catch it
+        try:
+            auroc = self.auroc.compute()
+        except:
+            auroc = torch.tensor(float("nan"))
+
+        try:
+            aupr = self.aupr.compute()
+        except:
+            aupr = torch.tensor(float("nan"))
+
         self.log("val/acc", acc, prog_bar=True)
         self.log("val/f1", f1)
+        self.log("val/auroc", auroc)
+        self.log("val/aupr", aupr)
 
+        # reset
         self.acc.reset()
         self.f1.reset()
+        self.auroc.reset()
+        self.aupr.reset()
 
     def configure_optimizers(self):
         return torch.optim.AdamW(
@@ -107,7 +131,6 @@ def run_head_training(args):
 
     ckpt = torch.load(args.load_backbone, map_location="cpu")
 
-    # backbone-only checkpoint
     if "backbone" in ckpt:
         backbone.load_state_dict(ckpt["backbone"])
     else:
@@ -153,7 +176,7 @@ def run_head_training(args):
     trainer.fit(model, datamodule=dm)
 
     # ------------------------------
-    # 6. Save final backbone+head checkpoint
+    # 6. Save final backbone + head
     # ------------------------------
     save_path = os.path.join(CHECKPOINT_DIR, "vmamba_final_head.pth")
     torch.save({

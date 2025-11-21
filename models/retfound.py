@@ -66,10 +66,9 @@ class RETFoundClassifier(pl.LightningModule):
         """Returns logits (full classifier forward)."""
         return self.model(x)
 
-    def forward_features(self, x, return_all_tokens=False):
-        if return_all_tokens:
-            return self.model.forward_features(x)  # returns full sequence (B, N, D)
-        return self.model.forward_features(x)[:, 0]  # cls token or pooled
+    def forward_features(self, x):
+        """Returns *features only* for distillation."""
+        return self.model.forward_features(x)
 
     # ---------------------
     #   Optimizer
