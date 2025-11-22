@@ -54,12 +54,16 @@ class DistillationModule(pl.LightningModule):
         # MAE-style pooling: ONLY visible tokens
         # -------------------------
         B, N, D = s.shape
-        visible = torch.gather(
-            s,
-            dim=1,
-            index=ids_keep.unsqueeze(-1).expand(-1, -1, D)
-        )
-        s_pooled = visible.mean(dim=1)     # (B, D)
+        if ids_keep is None:
+            # mask_ratio = 0 → pooled over the entire sequence
+            s_pooled = s.mean(dim=1)
+        else:
+            visible = torch.gather(
+                s,
+                dim=1,
+                index=ids_keep.unsqueeze(-1).expand(-1, -1, D)
+            )
+            s_pooled = visible.mean(dim=1)     # (B, D)
 
         # -------------------------
         # Project & cosine loss
@@ -96,12 +100,16 @@ class DistillationModule(pl.LightningModule):
             # MAE-style pooling: ONLY visible tokens
             # -------------------------
             B, N, D = s.shape
-            visible = torch.gather(
-                s,
-                dim=1,
-                index=ids_keep.unsqueeze(-1).expand(-1, -1, D)
-            )
-            s_pooled = visible.mean(dim=1)
+
+            if ids_keep is None:
+                s_pooled = s.mean(dim=1)
+            else:
+                visible = torch.gather(
+                    s,
+                    dim=1,
+                    index=ids_keep.unsqueeze(-1).expand(-1, -1, D)
+                )
+                s_pooled = visible.mean(dim=1)
 
             s_proj = self.projector(s_pooled)
 
