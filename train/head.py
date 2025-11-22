@@ -5,10 +5,11 @@ import torch.nn as nn
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from torchmetrics import Accuracy, F1Score, AUROC, AveragePrecision
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
 from config.constants import *
 from models.vmamba_backbone import VisualMamba
-from dataloader.idrid import IDRiDModule
+from dataloader.idrid import IDRiDModule, compute_idrid_class_weights
 from torchvision import transforms
 import os
 
@@ -20,9 +21,9 @@ class HeadTrainer(pl.LightningModule):
     - Trains classification head only
     """
 
-    def __init__(self, backbone, lr):
+    def __init__(self, backbone, lr, class_weights=None):
         super().__init__()
-        self.save_hyperparameters(ignore=["backbone"])
+        self.save_hyperparameters(ignore=["backbone", "class_weights"])
 
         # freeze backbone
         for p in backbone.parameters():
@@ -30,15 +31,39 @@ class HeadTrainer(pl.LightningModule):
         self.backbone = backbone.eval()
 
         # trainable head
-        self.head = nn.Linear(backbone.embed_dim, NUM_CLASSES)
+        self.head = nn.Sequential(
+            nn.Linear(backbone.embed_dim, 512),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
+            nn.Dropout(0.3),
 
-        self.loss_fn = nn.CrossEntropyLoss()
+            nn.Linear(512, 128),
+            nn.BatchNorm1d(128),
+            nn.GELU(),
+            nn.Dropout(0.2),
 
-        # -------- Metrics --------
-        self.acc = Accuracy(task="multiclass", num_classes=NUM_CLASSES)
-        self.f1 = F1Score(task="multiclass", num_classes=NUM_CLASSES, average="macro")
-        self.auroc = AUROC(task="multiclass", num_classes=NUM_CLASSES)
-        self.aupr = AveragePrecision(task="multiclass", num_classes=NUM_CLASSES)
+            nn.Linear(128, NUM_CLASSES)
+        )
+
+        if class_weights is not None:
+            self.register_buffer("class_weights", class_weights)
+            self.loss_fn = nn.CrossEntropyLoss(weight=self.class_weights)
+        else:
+            self.loss_fn = nn.CrossEntropyLoss()
+
+
+        # -------- Training Metrics --------
+        self.train_acc = Accuracy(task="multiclass", num_classes=NUM_CLASSES)
+        self.train_f1 = F1Score(task="multiclass", num_classes=NUM_CLASSES, average="macro")
+        self.train_auroc = AUROC(task="multiclass", num_classes=NUM_CLASSES)
+        self.train_aupr = AveragePrecision(task="multiclass", num_classes=NUM_CLASSES)
+
+        # -------- Validation Metrics --------
+        self.val_acc = Accuracy(task="multiclass", num_classes=NUM_CLASSES)
+        self.val_f1 = F1Score(task="multiclass", num_classes=NUM_CLASSES, average="macro")
+        self.val_auroc = AUROC(task="multiclass", num_classes=NUM_CLASSES)
+        self.val_aupr = AveragePrecision(task="multiclass", num_classes=NUM_CLASSES)
+
 
     def forward(self, x):
         with torch.no_grad():
@@ -50,7 +75,22 @@ class HeadTrainer(pl.LightningModule):
         logits = self(x)
         loss = self.loss_fn(logits, y)
 
-        self.log("train/loss", loss, prog_bar=True)
+        # --- Metrics ---
+        probs = torch.softmax(logits, dim=1)
+        preds = torch.argmax(probs, dim=1)
+
+        self.train_acc.update(preds, y)
+        self.train_f1.update(preds, y)
+
+        try:
+            self.train_auroc.update(probs, y)
+            self.train_aupr.update(probs, y)
+        except:
+            pass  # AUROC/AUPR crashes when batch missing classes
+
+        # Log loss now; metrics logged on epoch end
+        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -61,28 +101,29 @@ class HeadTrainer(pl.LightningModule):
         probs = torch.softmax(logits, dim=1)
         preds = torch.argmax(probs, dim=1)
 
-        # CORRECT
-        self.acc.update(preds, y)
-        self.f1.update(preds, y)
+        self.val_acc.update(preds, y)
+        self.val_f1.update(preds, y)
 
-        self.auroc.update(probs, y)
-        self.aupr.update(probs, y)
+        try:
+            self.val_auroc.update(probs, y)
+            self.val_aupr.update(probs, y)
+        except:
+            pass
 
         self.log("val/loss", loss, prog_bar=True)
         return loss
 
     def on_validation_epoch_end(self):
-        acc = self.acc.compute()
-        f1 = self.f1.compute()
+        acc = self.val_acc.compute()
+        f1 = self.val_f1.compute()
 
-        # multiclass AUROC/AUPR can throw if class missing → catch it
         try:
-            auroc = self.auroc.compute()
+            auroc = self.val_auroc.compute()
         except:
             auroc = torch.tensor(float("nan"))
 
         try:
-            aupr = self.aupr.compute()
+            aupr = self.val_aupr.compute()
         except:
             aupr = torch.tensor(float("nan"))
 
@@ -91,11 +132,10 @@ class HeadTrainer(pl.LightningModule):
         self.log("val/auroc", auroc)
         self.log("val/aupr", aupr)
 
-        # reset
-        self.acc.reset()
-        self.f1.reset()
-        self.auroc.reset()
-        self.aupr.reset()
+        self.val_acc.reset()
+        self.val_f1.reset()
+        self.val_auroc.reset()
+        self.val_aupr.reset()
 
     def configure_optimizers(self):
         return torch.optim.AdamW(
@@ -103,7 +143,31 @@ class HeadTrainer(pl.LightningModule):
             lr=self.hparams.lr,
             weight_decay=1e-4
         )
+    
+    def on_train_epoch_end(self):
+        acc = self.train_acc.compute()
+        f1 = self.train_f1.compute()
 
+        try:
+            auroc = self.train_auroc.compute()
+        except:
+            auroc = torch.tensor(float("nan"))
+
+        try:
+            aupr = self.train_aupr.compute()
+        except:
+            aupr = torch.tensor(float("nan"))
+
+        self.log("train/acc", acc, prog_bar=True)
+        self.log("train/f1", f1)
+        self.log("train/auroc", auroc)
+        self.log("train/aupr", aupr)
+
+        # Reset
+        self.train_acc.reset()
+        self.train_f1.reset()
+        self.train_auroc.reset()
+        self.train_aupr.reset()
 
 def run_head_training(args):
     pl.seed_everything(42)
@@ -139,8 +203,15 @@ def run_head_training(args):
     # ------------------------------
     # 2. Build HeadTrainer
     # ------------------------------
+    csv_path = os.path.join(
+        IDRID_PATH,
+        "2. Groundtruths",
+        "a. IDRiD_Disease Grading_Training Labels.csv"
+    )
+    class_weights = compute_idrid_class_weights(csv_path, NUM_CLASSES)
+    print("Class weights:", class_weights)
     lr = args.head_lr if args.head_lr else HEAD_LR
-    model = HeadTrainer(backbone, lr)
+    model = HeadTrainer(backbone, lr, class_weights=class_weights)
 
     # ------------------------------
     # 3. Data
@@ -155,9 +226,27 @@ def run_head_training(args):
         batch_size=BATCH_SIZE
     )
     dm.setup()
+    
 
     # ------------------------------
-    # 4. Trainer
+    # 4. Callbacks
+    # ------------------------------
+    checkpoint_callback = ModelCheckpoint(
+        monitor="val/f1",
+        mode="max",
+        save_top_k=1,
+        filename="best_head",
+    )
+
+    early_stop_callback = EarlyStopping(
+        monitor="val/loss",
+        patience=50,
+        mode="min",
+        verbose=False
+    )
+
+    # ------------------------------
+    # 5. Trainer
     # ------------------------------
     epochs = args.head_epochs if args.head_epochs else HEAD_EPOCHS
 
@@ -167,21 +256,21 @@ def run_head_training(args):
         devices=1,
         logger=logger,
         precision="16-mixed" if torch.cuda.is_available() else 32,
-        log_every_n_steps=50,
+        log_every_n_steps=4,
+        callbacks=[checkpoint_callback, early_stop_callback],
     )
 
     # ------------------------------
-    # 5. Train
+    # 6. Train
     # ------------------------------
     trainer.fit(model, datamodule=dm)
 
     # ------------------------------
-    # 6. Save final backbone + head
+    # 7. Save final backbone + head
     # ------------------------------
     save_path = os.path.join(CHECKPOINT_DIR, "vmamba_final_head.pth")
-    torch.save({
-        "backbone": backbone.state_dict(),
-        "head": model.head.state_dict(),
-    }, save_path)
+    best = torch.load(checkpoint_callback.best_model_path, map_location="cpu")
+
+    torch.save(best, save_path)
 
     print(f"[✓] Saved final model → {save_path}")
