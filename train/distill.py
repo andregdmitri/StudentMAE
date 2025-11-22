@@ -107,7 +107,7 @@ def run_distillation(args):
         devices=1 if torch.cuda.is_available() else None,
         logger=logger,
         precision="16-mixed" if torch.cuda.is_available() else 32,
-        log_every_n_steps=50,
+        log_every_n_steps=4,
         callbacks=[checkpoint_callback, early_stop_callback],
     )
 
@@ -121,8 +121,8 @@ def run_distillation(args):
     student_path = os.path.join(CHECKPOINT_DIR, "vmamba_distilled_student.pth")
     projector_path = os.path.join(CHECKPOINT_DIR, "vmamba_distilled_projector.pth")
 
-    torch.save(student.state_dict(), student_path)
-    torch.save(projector.state_dict(), projector_path)
+    torch.save({"backbone": student.state_dict()}, student_path)
+    torch.save({"projector": projector.state_dict()}, projector_path)
 
     print("\n========================")
     print("Saved distilled backbone:")
