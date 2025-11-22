@@ -1,4 +1,4 @@
-# datasets/idrid.py
+# dataloader/idrid.py
 
 import os
 import numpy as np
@@ -95,3 +95,15 @@ class IDRiDModule(pl.LightningDataModule):
             persistent_workers=True,
             num_workers=self.num_workers
         )
+
+def compute_idrid_class_weights(csv_path, num_classes=5):
+    df = pd.read_csv(csv_path)
+    counts = df["Retinopathy grade"].value_counts().sort_index()
+    # ensure all classes exist
+    counts = counts.reindex(range(num_classes), fill_value=0)
+
+    # inverse-frequency weighting
+    weights = 1.0 / (counts + 1e-6)
+    weights = weights / weights.sum() * num_classes
+
+    return torch.tensor(weights, dtype=torch.float32)
