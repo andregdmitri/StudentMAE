@@ -87,7 +87,7 @@ def run_distillation(args):
         patience=50,
         mode="min",
         min_delta=0.0,   
-        verbose=True
+        verbose=False
     )
 
     # ------------------------------

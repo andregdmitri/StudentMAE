@@ -61,7 +61,7 @@ class IDRiDDataset(Dataset):
         img_id = os.path.basename(p).replace(".jpg","")
         y = int(self.grade_map[img_id])    # 0..4
 
-        return img, y
+        return img, y, p
 
 
 class IDRiDModule(pl.LightningDataModule):
@@ -87,6 +87,16 @@ class IDRiDModule(pl.LightningDataModule):
         )
 
     def val_dataloader(self):
+        return DataLoader(
+            self.val,
+            batch_size=self.batch_size,
+            shuffle=False,
+            pin_memory=True,
+            persistent_workers=True,
+            num_workers=self.num_workers
+        )
+
+    def predict_dataloader(self):
         return DataLoader(
             self.val,
             batch_size=self.batch_size,

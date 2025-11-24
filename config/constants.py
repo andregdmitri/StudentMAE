@@ -14,7 +14,7 @@ HEAD_EPOCHS = int(os.getenv('HEAD_EPOCHS', 1000))
 
 INPUT_DIM = int(os.getenv('INPUT_DIM', 784))
 NUM_CLASSES = int(os.getenv('NUM_CLASSES', 5))
-MASK_RATIO = float(os.getenv('MASK_RATIO', 0.75))
+MASK_RATIO = float(os.getenv('MASK_RATIO', 0.3))
 IMG_SIZE = int(os.getenv('IMG_SIZE', 224))
 PATCH_SIZE = int(os.getenv('PATCH_SIZE', 16))
 IN_CHANS = int(os.getenv('IN_CHANS', 3))
