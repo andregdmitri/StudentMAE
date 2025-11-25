@@ -63,7 +63,7 @@ class VmambaClassifier(pl.LightningModule):
     # TRAIN
     # ----------------------------
     def training_step(self, batch, batch_idx):
-        x, y = batch
+        x, y, _ = batch
         logits = self(x)
         loss = self.loss_fn(logits, y)
 
@@ -82,7 +82,7 @@ class VmambaClassifier(pl.LightningModule):
     # VALIDATION
     # ----------------------------
     def validation_step(self, batch, batch_idx):
-        x, y = batch
+        x, y, _ = batch
         logits = self(x)
         loss = self.loss_fn(logits, y)
 
@@ -179,7 +179,7 @@ def train_vmamba_idrid():
 
     early = EarlyStopping(
         monitor="val/loss",
-        patience=30,
+        patience=PATIENCE,
         mode="min"
     )
 

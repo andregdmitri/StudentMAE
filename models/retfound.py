@@ -147,7 +147,7 @@ class RETFoundClassifier(pl.LightningModule):
     # ---------------------
     def training_step(self, batch, batch_idx):
         """Only needed if you fine-tune RETFound; otherwise unused."""
-        x, y = batch
+        x, y, _ = batch
         logits = self(x)
         loss = F.cross_entropy(logits, y)
         self.log("train/loss", loss, prog_bar=True)
@@ -155,7 +155,7 @@ class RETFoundClassifier(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         """Only needed if you fine-tune RETFound; otherwise unused."""
-        x, y = batch
+        x, y, _ = batch
         logits = self(x)
         loss = F.cross_entropy(logits, y)
         self.log("val/loss", loss, prog_bar=True)

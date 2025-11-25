@@ -35,7 +35,7 @@ class EvalWrapper(pl.LightningModule):
         return logits
 
     def validation_step(self, batch, batch_idx):
-        x, y = batch
+        x, y, _ = batch
         logits = self(x)
         probs = torch.softmax(logits, dim=1)
         preds = torch.argmax(probs, dim=1)

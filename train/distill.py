@@ -24,7 +24,8 @@ def build_student(args):
         embed_dim=VMAMBA_EMBED_DIM,
         depth=VMAMBA_DEPTH,
         learning_rate=lr,
-        mask_ratio=mask_ratio
+        mask_ratio=mask_ratio,
+        use_cls_token=False
     )
 
 
@@ -84,7 +85,7 @@ def run_distillation(args):
     # ------------------------------
     early_stop_callback = EarlyStopping(
         monitor="val/distill_loss",
-        patience=50,
+        patience=PATIENCE,
         mode="min",
         min_delta=0.0,   
         verbose=False

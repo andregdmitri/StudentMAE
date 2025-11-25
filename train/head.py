@@ -71,7 +71,7 @@ class HeadTrainer(pl.LightningModule):
         return self.head(feats)
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
+        x, y, _ = batch
         logits = self(x)
         loss = self.loss_fn(logits, y)
 
@@ -89,12 +89,12 @@ class HeadTrainer(pl.LightningModule):
             pass  # AUROC/AUPR crashes when batch missing classes
 
         # Log loss now; metrics logged on epoch end
-        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True, batch_size=x.size(0))
 
         return loss
 
     def validation_step(self, batch, batch_idx):
-        x, y = batch
+        x, y, _ = batch
         logits = self(x)
         loss = self.loss_fn(logits, y)
 
@@ -110,7 +110,7 @@ class HeadTrainer(pl.LightningModule):
         except:
             pass
 
-        self.log("val/loss", loss, prog_bar=True)
+        self.log("val/loss", loss, prog_bar=True, batch_size=x.size(0))
         return loss
 
     def on_validation_epoch_end(self):
@@ -191,6 +191,7 @@ def run_head_training(args):
         depth=VMAMBA_DEPTH,
         learning_rate=0.0,
         mask_ratio=0.0,
+        use_cls_token=False,
     )
 
     ckpt = torch.load(args.load_backbone, map_location="cpu")
@@ -240,7 +241,7 @@ def run_head_training(args):
 
     early_stop_callback = EarlyStopping(
         monitor="val/loss",
-        patience=50,
+        patience=PATIENCE,
         mode="min",
         verbose=False
     )
