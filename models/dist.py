@@ -96,7 +96,7 @@ class DistillationModule(pl.LightningModule):
     # TRAINING STEP
     # ---------------------------------------------------
     def training_step(self, batch, batch_idx):
-        x, _ = batch
+        x, _, _ = batch
 
         # ensure x is on same device as model params
         device = next(self.student.parameters()).device
@@ -152,14 +152,14 @@ class DistillationModule(pl.LightningModule):
         cosine = F.cosine_similarity(s_proj, t, dim=1)
         distill_loss = (1 - cosine).mean()
 
-        self.log("train/distill_loss", distill_loss, on_epoch=True, prog_bar=True)
+        self.log("train/distill_loss", distill_loss, on_epoch=True, prog_bar=True, batch_size=x.size(0))
         return distill_loss
 
     # ---------------------------------------------------
     # VALIDATION STEP
     # ---------------------------------------------------
     def validation_step(self, batch, batch_idx):
-        x, _ = batch
+        x, _, _ = batch
 
         device = next(self.student.parameters()).device
         if x.device != device:
@@ -203,7 +203,7 @@ class DistillationModule(pl.LightningModule):
         cosine = F.cosine_similarity(s_proj, t, dim=1)
         distill_loss = (1 - cosine).mean()
 
-        self.log("val/distill_loss", distill_loss, on_epoch=True, prog_bar=True)
+        self.log("val/distill_loss", distill_loss, on_epoch=True, prog_bar=True, batch_size=x.size(0))
         return distill_loss
 
     # ---------------------------------------------------
@@ -213,8 +213,8 @@ class DistillationModule(pl.LightningModule):
         params = list(self.student.parameters()) + list(self.projector.parameters())
         optimizer = torch.optim.Adam(params, lr=self.lr)
 
+        total_epochs = self.trainer.max_epochs  # ← dynamic
         warmup_epochs = 10
-        total_epochs = 50
         cosine_epochs = total_epochs - warmup_epochs
 
         base_lr = self.lr
