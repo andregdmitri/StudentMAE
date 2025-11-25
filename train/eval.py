@@ -99,22 +99,29 @@ def run_evaluation(args):
         depth=VMAMBA_DEPTH,
         learning_rate=0.0,
         mask_ratio=0.0,
+        use_cls_token=False,
     )
 
-    if "backbone" in ckpt:
-        backbone.load_state_dict(ckpt["backbone"])
-    else:
-        backbone.load_state_dict(ckpt, strict=False)
+    backbone.load_state_dict(ckpt["backbone"], strict=True)
 
     # ------------------------------
-    # Build classifier head
+    # Build REAL head (exact architecture used in training)
     # ------------------------------
-    head = nn.Linear(backbone.embed_dim, NUM_CLASSES)
+    head = nn.Sequential(
+        nn.Linear(backbone.embed_dim, 512),
+        nn.BatchNorm1d(512),
+        nn.GELU(),
+        nn.Dropout(0.3),
 
-    if "head" in ckpt:
-        head.load_state_dict(ckpt["head"])
-    else:
-        print("WARNING: No head found — random head!")
+        nn.Linear(512, 128),
+        nn.BatchNorm1d(128),
+        nn.GELU(),
+        nn.Dropout(0.2),
+
+        nn.Linear(128, NUM_CLASSES)
+    )
+
+    head.load_state_dict(ckpt["head"], strict=True)
     head.eval()
 
     # ------------------------------
@@ -133,7 +140,7 @@ def run_evaluation(args):
 
     logger = WandbLogger(project="vmamba_eval")
 
-    model = EvalWrapper(backbone, head)
+    model = EvalWrapper(backbone.eval(), head.eval())
 
     trainer = pl.Trainer(
         accelerator="gpu" if torch.cuda.is_available() else "cpu",

@@ -270,8 +270,23 @@ def run_head_training(args):
     # 7. Save final backbone + head
     # ------------------------------
     save_path = os.path.join(CHECKPOINT_DIR, "vmamba_final_head.pth")
-    best = torch.load(checkpoint_callback.best_model_path, map_location="cpu")
+    ckpt = torch.load(checkpoint_callback.best_model_path, map_location="cpu")
+    state = ckpt["state_dict"]  # ← extract real weights
 
-    torch.save(best, save_path)
+    # Split backbone & head cleanly
+    backbone_state = {}
+    head_state = {}
 
+    for k, v in state.items():
+        if k.startswith("backbone."):
+            backbone_state[k[len("backbone."):]] = v
+        elif k.startswith("head."):
+            head_state[k[len("head."):]] = v
+
+    final = {
+        "backbone": backbone_state,
+        "head": head_state,
+    }
+
+    torch.save(final, save_path)
     print(f"[✓] Saved final model → {save_path}")
