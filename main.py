@@ -10,7 +10,7 @@ from config.constants import (
 )
 from train.distill import run_distillation
 from train.head import run_head_training
-from train.eval import run_evaluation
+from eval.eval_vmamba import run_evaluation
 
 
 def parse_args():
@@ -80,6 +80,8 @@ Examples:
     # -----------------------------
     parser.add_argument("--load_model", type=str, default=None,
                         help="Full model checkpoint for evaluation")
+    parser.add_argument("--dataset", type=str, default="idrid",
+                        choices=["idrid", "aptos"])
 
     args = parser.parse_args()
 

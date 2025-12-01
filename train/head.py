@@ -10,6 +10,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from config.constants import *
 from models.vmamba_backbone import VisualMamba
 from dataloader.idrid import IDRiDModule, compute_idrid_class_weights
+from dataloader.aptos import APTOSModule, compute_aptos_class_weights
 from torchvision import transforms
 import os
 
@@ -89,7 +90,7 @@ class HeadTrainer(pl.LightningModule):
             pass  # AUROC/AUPR crashes when batch missing classes
 
         # Log loss now; metrics logged on epoch end
-        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True, batch_size=x.size(0))
+        self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=x.size(0))
 
         return loss
 
@@ -110,7 +111,7 @@ class HeadTrainer(pl.LightningModule):
         except:
             pass
 
-        self.log("val/loss", loss, prog_bar=True, batch_size=x.size(0))
+        self.log("val/loss", loss, on_step=False, prog_bar=True, batch_size=x.size(0))
         return loss
 
     def on_validation_epoch_end(self):
@@ -240,16 +241,16 @@ def run_head_training(args):
     )
 
     early_stop_callback = EarlyStopping(
-        monitor="val/loss",
-        patience=PATIENCE,
-        mode="min",
+        monitor="val/f1",
+        patience=50,
+        mode="max",
         verbose=False
     )
 
     # ------------------------------
     # 5. Trainer
     # ------------------------------
-    epochs = args.head_epochs if args.head_epochs else HEAD_EPOCHS
+    epochs = HEAD_EPOCHS
 
     trainer = pl.Trainer(
         max_epochs=epochs,

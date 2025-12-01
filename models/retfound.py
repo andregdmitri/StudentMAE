@@ -62,11 +62,48 @@ class RETFoundClassifier(pl.LightningModule):
     # ---------------------
     #   Forward Passes
     # ---------------------
-    def forward(self, x):
-        """Returns logits (full classifier forward)."""
-        return self.model(x)
+    def forward(self, x, *args, **kwargs):
+        """
+        Returns logits without invoking timm's VisionTransformer.forward() which may
+        call forward_features(..., attn_mask=...) and break compatibility with the
+        older RETFound ViT implementation.
 
-    def forward_features(self, x, return_pooled: bool = True, return_tokens: bool = False):
+        We call forward_features() directly and then the classification head.
+        """
+        # Get features robustly. Some model.forward_features may accept extra kwargs;
+        # swallow them if necessary by trying both.
+        try:
+            feats = self.model.forward_features(x, **kwargs)
+        except TypeError:
+            # signature mismatch (e.g. forward_features(self, x) — ignore kwargs)
+            feats = self.model.forward_features(x)
+        except Exception:
+            # As an extra fallback, call without kwargs
+            feats = self.model.forward_features(x)
+
+        # Now compute logits using the model's head (RETFound uses `head`)
+        # Some models return pooled features or (tokens, pooled). Use heuristics:
+        if hasattr(feats, "ndim") and feats.ndim == 3:
+            # If we got tokens (B, N, D), try to pool (use cls token at 0)
+            pooled = feats[:, 0]
+        elif isinstance(feats, tuple):
+            # if a tuple, try to extract pooled 2D item
+            pooled = None
+            for item in feats[::-1]:
+                if hasattr(item, "ndim") and item.ndim == 2:
+                    pooled = item
+                    break
+            if pooled is None:
+                pooled = feats[0]
+        else:
+            pooled = feats
+
+        # Pass through the head
+        logits = self.model.head(pooled)
+        return logits
+
+
+    def forward_features(self, x, return_pooled: bool = True, return_tokens: bool = False, *args, **kwargs):
         """
         Returns features.
         - If return_pooled=True returns pooled (B, D).

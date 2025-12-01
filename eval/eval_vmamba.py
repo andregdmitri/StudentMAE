@@ -1,4 +1,4 @@
-# train/eval.py
+# train/eval_vmamba.py
 
 import torch
 import torch.nn as nn
@@ -10,6 +10,7 @@ from config.constants import *
 from models.vmamba_backbone import VisualMamba
 from torchvision import transforms
 from dataloader.idrid import IDRiDModule
+from dataloader.aptos import APTOSModule
 
 
 class EvalWrapper(pl.LightningModule):
@@ -131,12 +132,15 @@ def run_evaluation(args):
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
     ])
-    dm = IDRiDModule(
-        root=IDRID_PATH,
-        transform=tfm,
-        batch_size=BATCH_SIZE
-    )
-    dm.setup()
+    if args.dataset == "idrid":
+        dm = IDRiDModule(root=IDRID_PATH, transform=tfm, batch_size=BATCH_SIZE)
+    elif args.dataset == "aptos":
+        dm = APTOSModule(root=APTOS_PATH, transform=tfm, batch_size=BATCH_SIZE)
+    else:
+        raise ValueError("Invalid dataset")
+
+    dm.setup(stage="validate")
+
 
     logger = WandbLogger(project="vmamba_eval")
 

@@ -8,6 +8,7 @@ from models.retfound import RETFoundClassifier
 from models.vmamba_backbone import VisualMamba
 from models.dist import DistillationModule
 from dataloader.idrid import IDRiDModule
+from dataloader.aptos import APTOSModule
 from torchvision import transforms
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 import os
@@ -115,15 +116,31 @@ def run_distillation(args):
     trainer.fit(model, datamodule=dm)
 
     # ------------------------------
-    # Save distilled student + projector separately
+    # Save distilled student + projector separately 
     # ------------------------------
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     student_path = os.path.join(CHECKPOINT_DIR, "vmamba_distilled_student.pth")
     projector_path = os.path.join(CHECKPOINT_DIR, "vmamba_distilled_projector.pth")
 
-    torch.save({"backbone": student.state_dict()}, student_path)
-    torch.save({"projector": projector.state_dict()}, projector_path)
+
+    best_ckpt = checkpoint_callback.best_model_path
+    print("Best checkpoint:", best_ckpt)
+
+    ckpt = torch.load(best_ckpt, map_location="cpu")
+    sd = ckpt["state_dict"]
+
+    student_sd = {}
+    projector_sd = {}
+
+    for k, v in sd.items():
+        if k.startswith("student."):
+            student_sd[k.replace("student.", "")] = v
+        if k.startswith("projector."):
+            projector_sd[k.replace("projector.", "")] = v
+
+    torch.save({"backbone": student_sd}, student_path)
+    torch.save({"projector": projector_sd}, projector_path)
 
     print("\n========================")
     print("Saved distilled backbone:")

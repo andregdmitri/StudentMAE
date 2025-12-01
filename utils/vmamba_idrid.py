@@ -75,7 +75,7 @@ class VmambaClassifier(pl.LightningModule):
         self.train_auroc.update(probs, y)
         self.train_aupr.update(probs, y)
 
-        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log("train/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         return loss
 
     # ----------------------------

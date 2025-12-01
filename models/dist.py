@@ -152,7 +152,7 @@ class DistillationModule(pl.LightningModule):
         cosine = F.cosine_similarity(s_proj, t, dim=1)
         distill_loss = (1 - cosine).mean()
 
-        self.log("train/distill_loss", distill_loss, on_epoch=True, prog_bar=True, batch_size=x.size(0))
+        self.log("train/distill_loss", distill_loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=x.size(0))
         return distill_loss
 
     # ---------------------------------------------------
@@ -203,7 +203,7 @@ class DistillationModule(pl.LightningModule):
         cosine = F.cosine_similarity(s_proj, t, dim=1)
         distill_loss = (1 - cosine).mean()
 
-        self.log("val/distill_loss", distill_loss, on_epoch=True, prog_bar=True, batch_size=x.size(0))
+        self.log("val/distill_loss", distill_loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=x.size(0))
         return distill_loss
 
     # ---------------------------------------------------
@@ -237,6 +237,9 @@ class DistillationModule(pl.LightningModule):
             "lr_scheduler": {
                 "scheduler": scheduler,
                 "interval": "epoch",
-                "frequency": 1
+                "frequency": 1,
+                "reduce_on_plateau": False,
+                "monitor": None,
+                "name": "cosine_warmup"
             }
         }

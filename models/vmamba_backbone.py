@@ -1,39 +1,23 @@
-"""
-Fixed vmamba_backbone.py — VimBlock corrected to be paper-faithful to Algorithm 1
-
-Key fixes applied compared to previous copy:
-- B and C heads now produce per-expanded-channel SSM params with shape (B, M, E, N)
-  (heads output expand * ssm_dim and are reshaped). Delta scaling preserved.
-- ssm_recurrence accepts C with shape (B, M, E, N) and uses it directly (no broadcasting
-  of a shared C across E).
-- z is linear; SiLU applied only at gating time.
-- Depthwise convs and log-space prefix-product remain for numerical stability.
-
-This file is intended as a drop-in replacement for the original module.
-"""
-
-from typing import Optional, Tuple
 import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from typing import Optional, Tuple
+from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
 from config.constants import *
+
+# Inverse softplus helper (to initialize bias so softplus(target) ~= target)
+def inverse_softplus(x: float):
+    # numerically stable inverse of softplus
+    return math.log(math.expm1(x + 1e-12) + 1e-12)
 
 class VimBlock(nn.Module):
     """
-    Paper-faithful VimBlock (Algorithm 1: Vision Mamba).
-
-    - d_model: input token dimension D
-    - expand: expanded channel dimension E
-    - ssm_dim: SSM internal dimension N
-    - kernel_size: Conv1d kernel size for per-channel conv
-
-    Notes:
-    - Heads B and C now produce (B, M, E, N) by outputting expand * ssm_dim and
-      reshaping. Delta still scales B if desired to match Alg.1 line 14 behavior.
-    - z is linear; gating uses SiLU(z) only at merge time.
-    - ssm_recurrence is vectorized and implemented in log-space for improved stability.
+    Vision Mamba (Vim) block — faithful implementation of Algorithm 1 (bidirectional SSM).
+    - Bidirectional conv1d + separate SSM heads (forward/backward)
+    - Δ parameterization: softplus(LinearΔ(x') + delta_bias)
+    - Ao constructed as: Ao = Δo * ParameterAo  (keeps ParameterAo in fp32)
+    - Uses selective_scan_fn when available, with a safe python fallback.
     """
 
     def __init__(self, d_model: int, expand: int, ssm_dim: int, kernel_size: int = 3):
@@ -42,153 +26,166 @@ class VimBlock(nn.Module):
         self.expand = expand  # E
         self.ssm_dim = ssm_dim  # N
 
-        # normalization
+        # LayerNorm + projections
         self.norm = nn.LayerNorm(d_model)
+        self.to_x = nn.Linear(d_model, expand)  # Linear_x
+        self.to_z = nn.Linear(d_model, expand)  # Linear_z
 
-        # project token -> x (E) and gating z (E)
-        self.to_x = nn.Linear(d_model, expand)
-        self.to_z = nn.Linear(d_model, expand)
-
-        # conv1d: depthwise per-channel conv to match per-expanded-channel conv behavior
+        # Forward / Backward Conv1d (depthwise conv per paper)
         pad = (kernel_size - 1) // 2
-        self.conv_f = nn.Conv1d(expand, expand, kernel_size, padding=pad, groups=expand)
-        self.conv_b = nn.Conv1d(expand, expand, kernel_size, padding=pad, groups=expand)
+        self.conv_fwd = nn.Conv1d(expand, expand, kernel_size, padding=pad, groups=expand)
+        self.conv_bwd = nn.Conv1d(expand, expand, kernel_size, padding=pad, groups=expand)
 
-        # SSM parameter heads for forward/backward:
-        # B, C will produce (B, M, E * N) then be reshaped to (B, M, E, N)
-        self.head_B_f = nn.Linear(expand, expand * ssm_dim)
-        self.head_C_f = nn.Linear(expand, expand * ssm_dim)
-        self.head_Delta_f = nn.Linear(expand, expand)
-        self.paramA_f = nn.Parameter(torch.randn(expand, ssm_dim) * 0.01)
+        # Heads for forward direction
+        self.B_fwd = nn.Linear(expand, expand * ssm_dim)
+        self.C_fwd = nn.Linear(expand, expand * ssm_dim)
+        self.D_fwd = nn.Linear(expand, expand)          # produces Δ pre-activation (per E)
+        self.DeltaBias_fwd = nn.Parameter(torch.zeros(expand))
 
-        self.head_B_b = nn.Linear(expand, expand * ssm_dim)
-        self.head_C_b = nn.Linear(expand, expand * ssm_dim)
-        self.head_Delta_b = nn.Linear(expand, expand)
-        self.paramA_b = nn.Parameter(torch.randn(expand, ssm_dim) * 0.01)
+        # Heads for backward direction
+        self.B_bwd = nn.Linear(expand, expand * ssm_dim)
+        self.C_bwd = nn.Linear(expand, expand * ssm_dim)
+        self.D_bwd = nn.Linear(expand, expand)
+        self.DeltaBias_bwd = nn.Parameter(torch.zeros(expand))
 
-        # learnable ParameterDelta/bias terms (one per expanded channel E)
-        # Alg.1: Delta_o <- softplus( LinearDelta(x') + ParameterDelta_o )
-        self.delta_bias_f = nn.Parameter(torch.zeros(expand))
-        self.delta_bias_b = nn.Parameter(torch.zeros(expand))
+        # Learnable base A parameters (per direction) with shape (E, N)
+        # Keep as fp32 param — we'll cast carefully later when building Ao
+        self.ParameterA_fwd = nn.Parameter(torch.randn(expand, ssm_dim) * -0.5)
+        self.ParameterA_bwd = nn.Parameter(torch.randn(expand, ssm_dim) * -0.5)
+        # mark them to avoid weight decay if desired
+        self.ParameterA_fwd._no_weight_decay = True
+        self.ParameterA_bwd._no_weight_decay = True
 
-        # final projection back to d_model
+        # output projection + final residual mapping
         self.to_out = nn.Linear(expand, d_model)
 
-        self._init_weights()
+        # init dt biases to inverse-softplus(target_dt) (so softplus yields ~target_dt at init)
+        target_dt = 0.01
+        inv = inverse_softplus(target_dt)
+        # set bias values (as in many SSM designs)
+        nn.init.constant_(self.DeltaBias_fwd, inv)
+        nn.init.constant_(self.DeltaBias_bwd, inv)
 
-    def _init_weights(self):
-        # encourage small initial Δ changes
-        nn.init.zeros_(self.head_Delta_f.weight)
-        nn.init.zeros_(self.head_Delta_f.bias)
-        nn.init.zeros_(self.head_Delta_b.weight)
-        nn.init.zeros_(self.head_Delta_b.bias)
-        # small init for paramA already done at creation
+        self.reset_parameters()
 
-    def ssm_recurrence(self, A: torch.Tensor, B: torch.Tensor, C: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+    def reset_parameters(self):
+        # small initialization for B/C heads to avoid blowup
+        nn.init.normal_(self.B_fwd.weight, mean=0.0, std=1e-4)
+        nn.init.normal_(self.C_fwd.weight, mean=0.0, std=1e-4)
+        nn.init.zeros_(self.B_fwd.bias)
+        nn.init.zeros_(self.C_fwd.bias)
+
+        nn.init.normal_(self.B_bwd.weight, mean=0.0, std=1e-4)
+        nn.init.normal_(self.C_bwd.weight, mean=0.0, std=1e-4)
+        nn.init.zeros_(self.B_bwd.bias)
+        nn.init.zeros_(self.C_bwd.bias)
+
+        # small init for D heads
+        nn.init.zeros_(self.D_fwd.weight)
+        nn.init.zeros_(self.D_fwd.bias)
+        nn.init.zeros_(self.D_bwd.weight)
+        nn.init.zeros_(self.D_bwd.bias)
+
+        # output projection
+        nn.init.zeros_(self.to_out.weight)
+        nn.init.zeros_(self.to_out.bias)
+
+    # ---- selective scan wrapper (tries fast kernel then python fallback) ----
+    def _selective_scan(self, A, B, C, X):
         """
-        Vectorized SSM recurrence, faithful to:
-            h_t = A_t * h_{t-1} + B_t * x_t    (elementwise over N)
-            y_t = sum_N ( h_t * C_t )
-
-        Inputs:
-            A: (B, M, E, N)
-            B: (B, M, E, N)
-            C: (B, M, E, N)
-            x: (B, M, E)
-        Returns:
-            y: (B, M, E)
-
-        Implementation detail:
-            We compute prefix products P_t = prod_{i=0..t} A_i in log-space for stability.
+        A,B,C: (B, M, E, N)
+        X: (B, M, E)
+        returns: Y (B, M, E)
+        Implementation tries selective_scan_fn (fast) on fp32 and falls back to safe python loop.
         """
+        orig_dtype = X.dtype
         Bsz, M, E, N = A.shape
-        device = A.device
-        dtype = A.dtype
-        eps = 1e-6
 
-        # Separate sign and magnitude to compute stable prefix products
-        signA = torch.sign(A)
-        absA = torch.clamp(torch.abs(A), min=eps)
+        # ensure contiguous and cast to float32 for the kernel
+        A_ = A.permute(0, 2, 1, 3).contiguous().float()
+        B_ = B.permute(0, 2, 1, 3).contiguous().float()
+        C_ = C.permute(0, 2, 1, 3).contiguous().float()
+        X_ = X.permute(0, 2, 1).contiguous().float()
 
-        # log-space cumulative product of absolute values
-        log_absA = torch.log(absA)  # (B, M, E, N)
-        logP = torch.cumsum(log_absA, dim=1)  # (B, M, E, N)
-        P_abs = torch.exp(logP)  # (B, M, E, N)
+        try:
+            Y = selective_scan_fn(A_, B_, C_, X_)  # expected (B, E, M)
+            Y = Y.permute(0, 2, 1)  # -> (B, M, E)
+            return Y.to(orig_dtype)
+        except Exception:
+            # Python fallback safe implementation (vectorized loop)
+            # h shape: (B, E, N)
+            device = A.device
+            h = torch.zeros(Bsz, E, N, dtype=orig_dtype, device=device)
+            outputs = []
+            for t in range(M):
+                A_t = A[:, t]  # (B, E, N)
+                B_t = B[:, t]  # (B, E, N)
+                C_t = C[:, t]  # (B, E, N)
+                x_t = X[:, t].unsqueeze(-1)  # (B, E, 1)
+                h = A_t * h + B_t * x_t     # elementwise multiply / broadcast
+                y_t = (h * C_t).sum(dim=-1) # (B, E)
+                outputs.append(y_t)
+            return torch.stack(outputs, dim=1)
 
-        # sign prefix product
-        signP = torch.cumprod(signA, dim=1)  # (B, M, E, N)
-
-        # full prefix product
-        P = signP * P_abs  # (B, M, E, N)
-
-        # invP used in term formulation: invP_t = 1 / P_t  (avoid divide by zero)
-        invP = 1.0 / (P + eps)
-
-        # prepare x as (B, M, E, 1)
-        x_unsq = x.unsqueeze(-1)  # (B, M, E, 1)
-
-        # term_k = invP_k * B_k * x_k -> (B, M, E, N)
-        term = invP * B * x_unsq
-
-        # S_t = cumsum(term, dim=1)
-        S = torch.cumsum(term, dim=1)  # (B, M, E, N)
-
-        # h_t = P_t * S_t
-        h = P * S  # (B, M, E, N)
-
-        # y_t = sum_N ( h_t * C_t ) -> (B, M, E)
-        y = (h * C).sum(dim=-1)
-
-        return y
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor):
         """
         x: (B, M, D)
-        returns: (B, M, D) after residual (Alg.1 line 28)
+        returns: (B, M, D)
         """
-        Bsz, M, D = x.shape
+        B, M, D = x.shape
 
-        x_norm = self.norm(x)                # (B, M, D)
-        x_proj = self.to_x(x_norm)           # (B, M, E)
-        # z must be linear per Alg.1; SiLU applied when gating.
-        z = self.to_z(x_norm)                # (B, M, E)
+        # normalize + project
+        x_norm = self.norm(x)
+        x_proj = self.to_x(x_norm)   # (B, M, E)
+        z = self.to_z(x_norm)        # (B, M, E)
 
-        # conv expects (B, C, L) so transpose, conv, transpose back
-        xf = self.conv_f(x_proj.transpose(1, 2)).transpose(1, 2)  # (B, M, E)
-        xf = F.silu(xf)
+        # ---- forward branch ----
+        # conv expects (B, E, M)
+        x_fwd = F.silu(self.conv_fwd(x_proj.transpose(1, 2))).transpose(1, 2)  # (B, M, E)
 
-        xb = self.conv_b(x_proj.flip(dims=[1]).transpose(1, 2)).transpose(1, 2).flip(dims=[1])
-        xb = F.silu(xb)
+        B_f = self.B_fwd(x_fwd).view(B, M, self.expand, self.ssm_dim)   # (B, M, E, N)
+        C_f = self.C_fwd(x_fwd).view(B, M, self.expand, self.ssm_dim)   # (B, M, E, N)
+        # Δ_fwd: (B, M, E)
+        delta_f_pre = self.D_fwd(x_fwd) + self.DeltaBias_fwd.view(1, 1, -1)
+        delta_f = F.softplus(delta_f_pre)
 
-        # produce SSM params
-        # Heads produce (B, M, E * N) then reshape -> (B, M, E, N)
-        Bf = self.head_B_f(xf).view(Bsz, M, self.expand, self.ssm_dim)   # (B, M, E, N)
-        Cf = self.head_C_f(xf).view(Bsz, M, self.expand, self.ssm_dim)   # (B, M, E, N)
-        Delta_f = F.softplus(self.head_Delta_f(xf) + self.delta_bias_f.view(1, 1, -1))  # (B, M, E)
-        # Af shape (B, M, E, N) = Delta_f.unsqueeze(-1) * paramA_f (E, N)
-        Af = Delta_f.unsqueeze(-1) * self.paramA_f.unsqueeze(0).unsqueeze(0)  # (B, M, E, N)
-        # Optionally scale B by Delta (Alg.1 line 14): keep for compatibility
-        Bf_full = Delta_f.unsqueeze(-1) * Bf  # (B, M, E, N)
+        # Ao_fwd = Δ_fwd * ParameterA_fwd  -> shape (B, M, E, N)
+        # keep ParameterA in fp32 and cast to device
+        ParamA_f = self.ParameterA_fwd.float().to(x_proj.device)
+        Ao_f = delta_f.unsqueeze(-1) * ParamA_f.view(1, 1, self.expand, self.ssm_dim)
 
-        Bb = self.head_B_b(xb).view(Bsz, M, self.expand, self.ssm_dim)
-        Cb = self.head_C_b(xb).view(Bsz, M, self.expand, self.ssm_dim)
-        Delta_b = F.softplus(self.head_Delta_b(xb) + self.delta_bias_b.view(1, 1, -1))
-        Ab = Delta_b.unsqueeze(-1) * self.paramA_b.unsqueeze(0).unsqueeze(0)
-        Bb_full = Delta_b.unsqueeze(-1) * Bb
+        # B_full_fwd = Δ_fwd * B_f (per Algo 1)
+        B_full_f = delta_f.unsqueeze(-1) * B_f  # (B, M, E, N)
 
-        # run SSM recurrence for forward/backward
-        y_f = self.ssm_recurrence(Af, Bf_full, Cf, xf)   # (B, M, E)
-        y_b = self.ssm_recurrence(Ab, Bb_full, Cb, xb)   # (B, M, E)
+        # ---- backward branch ----
+        x_bwd = F.silu(self.conv_bwd(x_proj.transpose(1, 2))).transpose(1, 2)  # (B, M, E)
+        B_b = self.B_bwd(x_bwd).view(B, M, self.expand, self.ssm_dim)
+        C_b = self.C_bwd(x_bwd).view(B, M, self.expand, self.ssm_dim)
+        delta_b_pre = self.D_bwd(x_bwd) + self.DeltaBias_bwd.view(1, 1, -1)
+        delta_b = F.softplus(delta_b_pre)
+        ParamA_b = self.ParameterA_bwd.float().to(x_proj.device)
+        Ao_b = delta_b.unsqueeze(-1) * ParamA_b.view(1, 1, self.expand, self.ssm_dim)
+        B_full_b = delta_b.unsqueeze(-1) * B_b
 
-        # gated merge, paper: y' = y * SiLU(z) (apply SiLU to z at gating time only)
-        g = F.silu(z)  # (B, M, E)
-        gated_f = y_f * g
-        gated_b = y_b * g
+        # ---- selective scan (forward) ----
+        # y_fwd: (B, M, E)
+        y_fwd = self._selective_scan(Ao_f, B_full_f, C_f, x_fwd)
 
-        y = gated_f + gated_b  # (B, M, E)
+        # ---- selective scan (backward) ----
+        # process reversed sequence then flip back to get backward outputs
+        x_bwd_rev = x_bwd.flip(dims=[1])                       # (B, M, E)
+        Ao_b_rev = Ao_b.flip(dims=[1])                         # (B, M, E, N)
+        B_full_b_rev = B_full_b.flip(dims=[1])
+        C_b_rev = C_b.flip(dims=[1])
 
-        out = self.to_out(y)  # (B, M, D)
-        return out + x
+        y_bwd_rev = self._selective_scan(Ao_b_rev, B_full_b_rev, C_b_rev, x_bwd_rev)  # (B, M, E)
+        y_bwd = y_bwd_rev.flip(dims=[1])  # (B, M, E)
+
+        # ---- gate and combine ----
+        y = (y_fwd + y_bwd) * F.silu(z)   # (B, M, E)
+        out = self.to_out(y)             # (B, M, D)
+
+        return x + out
 
 
 class VisualMamba(nn.Module):
