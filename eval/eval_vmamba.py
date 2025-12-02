@@ -5,6 +5,7 @@ import torch.nn as nn
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from torchmetrics import Accuracy, F1Score, AUROC, AveragePrecision
+from utils.flops import compute_flops
 
 from config.constants import *
 from models.vmamba_backbone import VisualMamba
@@ -152,7 +153,13 @@ def run_evaluation(args):
         logger=logger,
         precision="16-mixed" if torch.cuda.is_available() else 32,
     )
-
+    
     print("\n=== Running Evaluation ===")
     trainer.validate(model, datamodule=dm)
     print("\n=== Done ===\n")
+
+    # ---------------- FLOPs Report ----------------
+    print("\n=== MODEL FLOPs (Eval Mode) ===")
+    flops, params = compute_flops(model, IMG_SIZE)
+    print(f"Total FLOPs:   {flops/1e9:.3f} GFLOPs")
+    # print(f"Total Params:  {params/1e6:.3f} M\n")

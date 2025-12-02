@@ -7,6 +7,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
+from utils.flops import compute_flops
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import WandbLogger
 from torchmetrics import Accuracy, AUROC, F1Score, AveragePrecision
@@ -351,6 +352,11 @@ def run_eval(dataset: str, ckpt: str):
     )
 
     trainer.validate(wrapper, dm)
+        # Compute FLOPs
+    total_flops, total_params = compute_flops(model, IMG_SIZE)
+
+    print("\n=== MODEL COMPLEXITY ===")
+    print(f"FLOPs:   {total_flops/1e9:.2f} GFLOPs")
 
 
 # -----------------------------------------------------------
