@@ -222,8 +222,16 @@ def run_train(args):
         transforms.ToTensor(),
     ])
 
-    dm = APTOSModule(root=APTOS_PATH, transform=tfm, batch_size=BATCH_SIZE)
-    dm.setup(stage="full")
+    if args.dataset == "idrid":
+        dm = IDRiDModule(
+            root=IDRID_PATH,
+            transform=tfm,
+            batch_size=BATCH_SIZE
+        )
+        dm.setup()
+    else:
+        dm = APTOSModule(root=APTOS_PATH, transform=tfm, batch_size=BATCH_SIZE)
+        dm.setup(stage="train")
 
     ckpt_cb = ModelCheckpoint(
         monitor="val/f1",
