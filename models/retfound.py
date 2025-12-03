@@ -25,7 +25,7 @@ class RETFoundClassifier(pl.LightningModule):
         num_classes=NUM_CLASSES,
         checkpoint_path=os.path.join(CHECKPOINT_DIR, "RETFound_cfp_weights.pth"),
         drop_path_rate=0.2,
-        learning_rate=DIST_LR,
+        learning_rate=LR,
     ):
         super().__init__()
 

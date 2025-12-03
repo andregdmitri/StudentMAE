@@ -15,7 +15,7 @@ import os
 import torch.nn as nn
 
 def build_student(args):
-    lr = args.dist_lr if args.dist_lr is not None else DIST_LR
+    lr = args.lr if args.lr is not None else LR
     mask_ratio = args.mask_ratio if args.mask_ratio is not None else MASK_RATIO
 
     return VisualMamba(
@@ -70,7 +70,7 @@ def run_distillation(args):
     dm.setup()
 
     # Distillation model
-    lr = args.dist_lr if args.dist_lr else DIST_LR
+    lr = args.lr if args.lr else LR
     epochs = args.dist_epochs if args.dist_epochs is not None else DIST_EPOCHS
 
     model = DistillationModule(
@@ -79,7 +79,6 @@ def run_distillation(args):
         projector=projector,
         lr=lr,
     )
-
 
     # ------------------------------
     # Early stopping callback

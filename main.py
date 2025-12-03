@@ -2,8 +2,7 @@
 
 import argparse
 from config.constants import (
-    DIST_LR,
-    HEAD_LR,
+    LR,
     MASK_RATIO,
     DIST_EPOCHS,
     HEAD_EPOCHS,
@@ -21,7 +20,7 @@ Examples:
   # Phase I: Distillation
   # -----------------------------
   python main.py --run distill \
-      --dist_lr 1e-4 \
+      --lr 1e-4 \
       --mask_ratio 0.75
 
   # -----------------------------
@@ -29,7 +28,7 @@ Examples:
   # -----------------------------
   python main.py --run head \
       --load_backbone checkpoints/vmamba_distilled_student.pth \
-      --head_lr 1e-4
+      --lr 1e-4
 
   # -----------------------------
   # Phase III: Evaluation
@@ -56,8 +55,8 @@ Examples:
     # -----------------------------
     # Phase I distillation args
     # -----------------------------
-    parser.add_argument("--dist_lr", type=float, default=DIST_LR,
-                        help="Learning rate for Phase I")
+    parser.add_argument("--lr", type=float, default=LR,
+                        help="Learning rate for distillation & head training")
     parser.add_argument("--mask_ratio", type=float, default=MASK_RATIO,
                         help="Mask ratio for student MAE masking")
     parser.add_argument("--dist_epochs", type=int, default=DIST_EPOCHS,
@@ -68,8 +67,6 @@ Examples:
     # -----------------------------
     # Phase II head training args
     # -----------------------------
-    parser.add_argument("--head_lr", type=float, default=HEAD_LR,
-                        help="Learning rate for Phase II")
     parser.add_argument("--head_epochs", type=int, default=HEAD_EPOCHS,
                         help="Number of head training epochs")
     parser.add_argument("--load_backbone", type=str, default=None,

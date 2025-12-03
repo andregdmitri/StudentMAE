@@ -201,7 +201,7 @@ class VisualMamba(nn.Module):
         depth=VMAMBA_DEPTH,
         ssm_dim=SSM_DIM,
         expand_dim=EXPAND_DIM,
-        learning_rate=DIST_LR,
+        learning_rate=LR,
         mask_ratio=MASK_RATIO,
         use_cls_token: bool = True,
         variant="tiny",

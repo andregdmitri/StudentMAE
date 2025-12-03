@@ -14,6 +14,8 @@ from dataloader.aptos import APTOSModule, compute_aptos_class_weights
 from torchvision import transforms
 import os
 
+from optimizers.optmizer import warmup_cosine_optimizer
+
 
 class HeadTrainer(pl.LightningModule):
     """
@@ -27,10 +29,15 @@ class HeadTrainer(pl.LightningModule):
         self.save_hyperparameters(ignore=["backbone", "class_weights"])
 
         # freeze backbone
-        for p in backbone.parameters():
-            p.requires_grad = False
-        self.backbone = backbone.eval()
-
+        print(f"[i] Freezing backbone: {FREEZE_BACKBONE}")
+        if FREEZE_BACKBONE:
+            for p in backbone.parameters():
+                p.requires_grad = False
+            self.backbone = backbone.eval()
+        else: #
+            for p in backbone.parameters():
+                p.requires_grad = True
+            self.backbone = backbone
         # trainable head
         self.head = nn.Sequential(
             nn.Linear(backbone.embed_dim, 512),
@@ -67,7 +74,10 @@ class HeadTrainer(pl.LightningModule):
 
 
     def forward(self, x):
-        with torch.no_grad():
+        if FREEZE_BACKBONE:
+            with torch.no_grad():
+                feats = self.backbone.forward_features(x)
+        else:
             feats = self.backbone.forward_features(x)
         return self.head(feats)
 
@@ -139,11 +149,23 @@ class HeadTrainer(pl.LightningModule):
         self.val_aupr.reset()
 
     def configure_optimizers(self):
-        return torch.optim.AdamW(
-            self.head.parameters(),
+        params = list(self.head.parameters())
+        if not FREEZE_BACKBONE:
+            params += list(self.backbone.parameters())
+
+        optimizer, scheduler = warmup_cosine_optimizer(
+            parameters=params,
+            max_epochs=self.trainer.max_epochs,
             lr=self.hparams.lr,
-            weight_decay=1e-4
+            warmup_epochs=WARMUP_EPOCHS,
+            final_lr=FINAL_LR,
+            weight_decay=WEIGHT_DECAY
         )
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": scheduler
+        }
     
     def on_train_epoch_end(self):
         acc = self.train_acc.compute()
@@ -212,7 +234,7 @@ def run_head_training(args):
     )
     class_weights = compute_idrid_class_weights(csv_path, NUM_CLASSES)
     print("Class weights:", class_weights)
-    lr = args.head_lr if args.head_lr else HEAD_LR
+    lr = args.lr if args.lr else LR
     model = HeadTrainer(backbone, lr, class_weights=class_weights)
 
     # ------------------------------
@@ -242,7 +264,7 @@ def run_head_training(args):
 
     early_stop_callback = EarlyStopping(
         monitor="val/f1",
-        patience=50,
+        patience=100,
         mode="max",
         verbose=False
     )

@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
+from config.constants import *
+from optimizers.optmizer import warmup_cosine_optimizer
 import math
 
 class DistillationModule(pl.LightningModule):
@@ -211,35 +213,17 @@ class DistillationModule(pl.LightningModule):
     # ---------------------------------------------------
     def configure_optimizers(self):
         params = list(self.student.parameters()) + list(self.projector.parameters())
-        optimizer = torch.optim.Adam(params, lr=self.lr)
 
-        total_epochs = self.trainer.max_epochs  # ← dynamic
-        warmup_epochs = 10
-        cosine_epochs = total_epochs - warmup_epochs
-
-        base_lr = self.lr
-        final_lr = 1e-6
-
-        def lr_lambda(epoch):
-            if epoch < warmup_epochs:
-                return epoch / warmup_epochs
-
-            # ---- cosine annealing for remaining epochs ----
-            progress = (epoch - warmup_epochs) / cosine_epochs
-            cosine_decay = 0.5 * (1 + math.cos(progress * math.pi))
-            min_factor = final_lr / base_lr
-            return cosine_decay * (1 - min_factor) + min_factor
-
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        optimizer, scheduler = warmup_cosine_optimizer(
+            parameters=params,
+            max_epochs=self.trainer.max_epochs,
+            lr=self.lr,
+            warmup_epochs=WARMUP_EPOCHS,
+            final_lr=FINAL_LR,
+            weight_decay=WEIGHT_DECAY
+        )
 
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "epoch",
-                "frequency": 1,
-                "reduce_on_plateau": False,
-                "monitor": None,
-                "name": "cosine_warmup"
-            }
+            "lr_scheduler": scheduler
         }

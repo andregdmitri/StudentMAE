@@ -6,8 +6,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Model Config
-DIST_LR = float(os.getenv('DIST_LR', 1e-4))
-HEAD_LR = float(os.getenv('HEAD_LR', 5e-3))
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 64))
 DIST_EPOCHS = int(os.getenv('DIST_EPOCHS', 1000))
 HEAD_EPOCHS = int(os.getenv('HEAD_EPOCHS', 1000))
@@ -24,8 +22,14 @@ SSM_DIM = int(os.getenv('SSM_DIM', 8))
 EXPAND_DIM = int(os.getenv('EXPAND_DIM', VMAMBA_EMBED_DIM * 2))
 TEACHER_EMBED_DIM = int(os.getenv('TEACHER_EMBED_DIM', 1024))
 NUM_WORKERS = int(os.getenv('NUM_WORKERS', 12))
-PATIENCE = int(os.getenv('PATIENCE', 15))
+PATIENCE = int(os.getenv('PATIENCE', 50))
+FREEZE_BACKBONE = os.getenv('FREEZE_BACKBONE', 'False') == 'True'
+
+# Optimizer settings
 WARMUP_EPOCHS = int(os.getenv('WARMUP_EPOCHS', 10))
+LR = float(os.getenv('LR', 5e-4))
+FINAL_LR = float(os.getenv('FINAL_LR', 1e-6))
+WEIGHT_DECAY = float(os.getenv('WEIGHT_DECAY', 1e-4))
 
 # Other settings
 DEVICE = os.getenv('DEVICE', 'cuda' if torch.cuda.is_available() else 'cpu')
