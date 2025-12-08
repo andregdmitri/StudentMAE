@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Model Config
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', 64))
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', 32))
 DIST_EPOCHS = int(os.getenv('DIST_EPOCHS', 1000))
 HEAD_EPOCHS = int(os.getenv('HEAD_EPOCHS', 1000))
 MASK_RATIO = float(os.getenv('MASK_RATIO', 0.75))
