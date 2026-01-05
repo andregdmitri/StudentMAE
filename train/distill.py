@@ -62,11 +62,19 @@ def run_distillation(args):
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
     ])
-    dm = IDRiDModule(
-        root=IDRID_PATH,
-        transform=tfm,
-        batch_size=BATCH_SIZE
-    )
+
+    if args.dataset == "aptos":
+        dm = APTOSModule(
+            root=APTOS_PATH,
+            transform=tfm,
+            batch_size=BATCH_SIZE
+        )
+    else:
+        dm = IDRiDModule(
+            root=IDRID_PATH,
+            transform=tfm,
+            batch_size=BATCH_SIZE
+        )
     dm.setup()
 
     # Distillation model

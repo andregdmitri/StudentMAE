@@ -219,10 +219,23 @@ def run_head_training(args):
 
     ckpt = torch.load(args.load_backbone, map_location="cpu")
 
-    if "backbone" in ckpt:
-        backbone.load_state_dict(ckpt["backbone"])
+    if "state_dict" in ckpt:
+        state_dict = ckpt["state_dict"]
+
+        # Extract only backbone weights
+        backbone_state = {}
+        for k, v in state_dict.items():
+            if k.startswith("backbone."):
+                backbone_state[k[len("backbone."):]] = v
+    
+        missing, unexpected = backbone.load_state_dict(backbone_state, strict=False)
+        print("[i] Missing:", missing)
+        print("[i] Unexpected:", unexpected)
+
+    # Case 2: raw torch.save(state_dict)
     else:
         backbone.load_state_dict(ckpt)
+
 
     # ------------------------------
     # 2. Build HeadTrainer
@@ -244,11 +257,18 @@ def run_head_training(args):
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
     ])
-    dm = IDRiDModule(
-        root=IDRID_PATH,
-        transform=tfm,
-        batch_size=BATCH_SIZE
-    )
+    if args.dataset == "aptos":
+        dm = APTOSModule(
+            root=APTOS_PATH,
+            transform=tfm,
+            batch_size=BATCH_SIZE
+        )
+    else:
+        dm = IDRiDModule(
+            root=IDRID_PATH,
+            transform=tfm,
+            batch_size=BATCH_SIZE
+        )
     dm.setup()
     
 
