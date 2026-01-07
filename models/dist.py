@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 from config.constants import *
-from optimizers.optmizer import warmup_cosine_optimizer
+from optmizers.optmizer import warmup_cosine_optimizer
 import math
 
 class DistillationModule(pl.LightningModule):
@@ -211,7 +211,7 @@ class DistillationModule(pl.LightningModule):
     # ---------------------------------------------------
     # OPTIMIZER + WARMUP + COSINE ANNEALING
     # ---------------------------------------------------
-    def configure_optimizers(self):
+    def configure_optmizers(self):
         params = list(self.student.parameters()) + list(self.projector.parameters())
 
         optimizer, scheduler = warmup_cosine_optimizer(

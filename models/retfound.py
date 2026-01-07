@@ -12,9 +12,9 @@ from . import models_vit  # from RETFound repo
 from utils.pos_embed import interpolate_pos_embed
 
 
-class RETFoundClassifier(pl.LightningModule):
+class RETFoundBackbone(pl.LightningModule):
     """
-    RETFound Vision Transformer without BaseClassifier.
+    RETFound Vision Transformer Backbone.
     You can use:
         - forward(x) for logits
         - forward_features(x) for backbone features (used in distillation)
@@ -173,25 +173,8 @@ class RETFoundClassifier(pl.LightningModule):
             # reduce logits to a feature-like tensor to avoid breaking callers
             return logits.detach()
 
-    # ---------------------
-    #   Optimizer
-    # ---------------------
-    def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-
-    # ---------------------
-    #   Optional Training Step (NOT used for distillation)
-    # ---------------------
-    def training_step(self, batch, batch_idx):
-        """Only needed if you fine-tune RETFound; otherwise unused."""
-        x, y, _ = batch
-        logits = self(x)
-        loss = F.cross_entropy(logits, y)
-        self.log("train/loss", loss, prog_bar=True)
-        return loss
-
+    # Validation step used to compute complexity
     def validation_step(self, batch, batch_idx):
-        """Only needed if you fine-tune RETFound; otherwise unused."""
         x, y, _ = batch
         logits = self(x)
         loss = F.cross_entropy(logits, y)

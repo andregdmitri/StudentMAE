@@ -1,187 +1,180 @@
-# train/train_retfound.py
-
 import os
 import torch
+import torch.nn as nn
 import pytorch_lightning as pl
-from torchvision import transforms
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import WandbLogger
 from torchmetrics import Accuracy, AUROC, F1Score, AveragePrecision
+from torchvision import transforms
 
 from config.constants import *
-from models.retfound import RETFoundClassifier
+from models.retfound import RETFoundBackbone
 from dataloader.idrid import IDRiDModule, compute_idrid_class_weights
 from dataloader.aptos import APTOSModule
+from optmizers.optmizer import warmup_cosine_optimizer
 
+# -----------------------------------------------------------
+#  Module: RETFoundTask
+# -----------------------------------------------------------
 
-# ------------------------------------------------------------
-# Backbone loading
-# ------------------------------------------------------------
-
-def load_retfound_backbone(path=None):
-    if path is None:
-        path = os.path.join(CHECKPOINT_DIR, "RETFound_cfp_weights.pth")
-
-    print(f"[INFO] Loading RETFound backbone from {path}")
-
-    model = RETFoundClassifier(
-        num_classes=NUM_CLASSES,
-        checkpoint_path=path
-    ).eval()
-
-    vit = model.model
-    embed_dim = vit.head.weight.shape[1]
-
-    return vit, embed_dim
-
-
-def get_feats(backbone, x):
-    with torch.no_grad():
-        feats = backbone.forward_features(x)
-    return feats
-
-
-# ------------------------------------------------------------
-# Linear Probe Lightning Module
-# ------------------------------------------------------------
-
-class RETFoundLinearProbe(pl.LightningModule):
-    def __init__(self, backbone, embed_dim, lr, class_weights=None):
+class RETFoundTask(pl.LightningModule):
+    def __init__(self, mode="linear", lr=3e-4, checkpoint_path=None, class_weights=None):
         super().__init__()
-        self.save_hyperparameters(ignore=["backbone"])
+        self.save_hyperparameters(ignore=["class_weights"])
+        self.mode = mode
+        
+        # 1. Load the RETFound Model
+        # We use the existing RETFoundBackbone to get the ViT backbone
+        full_model = RETFoundBackbone(
+            num_classes=NUM_CLASSES,
+            checkpoint_path=checkpoint_path or os.path.join(CHECKPOINT_DIR, "RETFound_cfp_weights.pth")
+        )
+        self.backbone = full_model.model
+        self.embed_dim = self.backbone.head.weight.shape[1]
+        
+        # 2. Re-initialize Head
+        self.head = nn.Linear(self.embed_dim, NUM_CLASSES)
+        
+        # 3. Handle Freezing logic
+        if mode == "linear":
+            for param in self.backbone.parameters():
+                param.requires_grad = False
+        else: # finetune
+            for param in self.backbone.parameters():
+                param.requires_grad = True
 
-        for p in backbone.parameters():
-            p.requires_grad = False
-        self.backbone = backbone.eval()
-
-        self.head = torch.nn.Linear(embed_dim, NUM_CLASSES)
-
-        if class_weights is not None:
-            self.register_buffer("cw", class_weights)
-            self.loss_fn = torch.nn.CrossEntropyLoss(weight=self.cw)
-        else:
-            self.loss_fn = torch.nn.CrossEntropyLoss()
-
-        self.acc = Accuracy(task="multiclass", num_classes=NUM_CLASSES)
-        self.f1 = F1Score(task="multiclass", num_classes=NUM_CLASSES, average="macro")
-        self.auroc = AUROC(task="multiclass", num_classes=NUM_CLASSES)
-        self.aupr = AveragePrecision(task="multiclass", num_classes=NUM_CLASSES)
+        # 4. Loss & Metrics
+        self.loss_fn = nn.CrossEntropyLoss(weight=class_weights) if class_weights is not None else nn.CrossEntropyLoss()
+        
+        self.metrics = nn.ModuleDict({
+            "acc": Accuracy(task="multiclass", num_classes=NUM_CLASSES),
+            "f1": F1Score(task="multiclass", num_classes=NUM_CLASSES, average="macro"),
+            "auroc": AUROC(task="multiclass", num_classes=NUM_CLASSES),
+            "aupr": AveragePrecision(task="multiclass", num_classes=NUM_CLASSES)
+        })
 
     def forward(self, x):
-        feats = get_feats(self.backbone, x)
+        # RETFound ViT-L forward_features returns pooled [CLS] or average features (B, D)
+        if self.mode == "linear":
+            with torch.no_grad():
+                feats = self.backbone.forward_features(x)
+        else:
+            feats = self.backbone.forward_features(x)
         return self.head(feats)
 
-    def training_step(self, batch, batch_idx):
+    def shared_step(self, batch, stage):
         x, y, _ = batch
         logits = self(x)
         loss = self.loss_fn(logits, y)
-        self.log("train/loss", loss, prog_bar=True)
+        
+        probs = torch.softmax(logits, dim=1)
+        preds = torch.argmax(probs, dim=1)
+
+        # Update metrics
+        self.metrics["acc"].update(preds, y)
+        self.metrics["f1"].update(preds, y)
+        try:
+            self.metrics["auroc"].update(probs, y)
+            self.metrics["aupr"].update(probs, y)
+        except ValueError: 
+            pass # Handle cases where a batch doesn't contain all classes
+
+        self.log(f"{stage}/loss", loss, prog_bar=True, on_epoch=True, batch_size=x.size(0))
         return loss
+
+    def training_step(self, batch, batch_idx):
+        return self.shared_step(batch, "train")
 
     def validation_step(self, batch, batch_idx):
-        x, y, _ = batch
-        logits = self(x)
-        loss = self.loss_fn(logits, y)
-        self.log("val/loss", loss, prog_bar=True)
-        return loss
+        return self.shared_step(batch, "val")
 
-    def configure_optimizers(self):
-        return torch.optim.AdamW(self.head.parameters(), lr=self.hparams.lr)
+    def on_train_epoch_end(self):
+        self._log_and_reset_metrics("train")
 
+    def on_validation_epoch_end(self):
+        self._log_and_reset_metrics("val")
 
-# ------------------------------------------------------------
-# Fine-tuning Lightning Module
-# ------------------------------------------------------------
+    def _log_and_reset_metrics(self, stage):
+        for name, metric in self.metrics.items():
+            try:
+                val = metric.compute()
+                self.log(f"{stage}/{name}", val, prog_bar=(name == "f1" or name == "acc"))
+            except:
+                pass
+            metric.reset()
 
-class RETFoundFineTune(pl.LightningModule):
-    def __init__(self, model, lr, class_weights=None):
-        super().__init__()
-        self.model = model
-        self.lr = lr
-
-        if class_weights is not None:
-            self.register_buffer("cw", class_weights)
-            self.loss_fn = torch.nn.CrossEntropyLoss(weight=self.cw)
+    def configure_optmizers(self):
+        if self.mode == "linear":
+            # Simple AdamW for Linear Probing
+            return torch.optim.AdamW(self.head.parameters(), lr=self.hparams.lr, weight_decay=1e-4)
         else:
-            self.loss_fn = torch.nn.CrossEntropyLoss()
+            # Warmup Cosine for Fine-tuning
+            optimizer, scheduler = warmup_cosine_optimizer(
+                parameters=self.parameters(),
+                max_epochs=self.trainer.max_epochs,
+                lr=self.hparams.lr,
+                warmup_epochs=WARMUP_EPOCHS,
+                final_lr=FINAL_LR,
+                weight_decay=WEIGHT_DECAY
+            )
+            return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
-    def forward(self, x):
-        return self.model(x)
-
-    def training_step(self, batch, batch_idx):
-        x, y, _ = batch
-        logits = self(x)
-        loss = self.loss_fn(logits, y)
-        self.log("train/loss", loss, prog_bar=True)
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        x, y, _ = batch
-        logits = self(x)
-        loss = self.loss_fn(logits, y)
-        self.log("val/loss", loss, prog_bar=True)
-        return loss
-
-    def configure_optimizers(self):
-        return torch.optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
-
-
-# ------------------------------------------------------------
-# Unified Train Entry
-# ------------------------------------------------------------
+# -----------------------------------------------------------
+#  Unified Train Entry
+# -----------------------------------------------------------
 
 def run_train_retfound(args):
     pl.seed_everything(42)
-    print("\n=== RETFound Training Mode:", args.retfound_mode, "===\n")
-
-    # Backbone
-    backbone, embed_dim = load_retfound_backbone(args.checkpoint)
-
-    # Class weights (IDRiD only)
-    csv = os.path.join(IDRID_PATH, "2. Groundtruths", "a. IDRiD_Disease Grading_Training Labels.csv")
-    class_weights = compute_idrid_class_weights(csv, NUM_CLASSES)
-
-    # Dataset
-    tfm = transforms.Compose([
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
-        transforms.ToTensor(),
-    ])
+    
+    # 1. Setup Data
+    # Use standard resize for finetune, stronger augs for linear probing
+    if args.retfound_mode == "linear":
+        tfm = transforms.Compose([
+            transforms.Resize(int(IMG_SIZE * 1.15)),
+            transforms.RandomResizedCrop(IMG_SIZE, scale=(0.8, 1.0)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(0.3, 0.3, 0.3, 0.1),
+            transforms.ToTensor(),
+        ])
+    else:
+        tfm = transforms.Compose([
+            transforms.Resize((IMG_SIZE, IMG_SIZE)),
+            transforms.ToTensor(),
+        ])
 
     if args.dataset == "idrid":
         dm = IDRiDModule(root=IDRID_PATH, transform=tfm, batch_size=BATCH_SIZE)
-        dm.setup()
+        csv = os.path.join(IDRID_PATH, "2. Groundtruths", "a. IDRiD_Disease Grading_Training Labels.csv")
+        class_weights = compute_idrid_class_weights(csv, NUM_CLASSES)
     else:
         dm = APTOSModule(root=APTOS_PATH, transform=tfm, batch_size=BATCH_SIZE)
-        dm.setup(stage="train")
+        class_weights = None
 
-    # Choose model
-    if args.retfound_mode == "linear":
-        model = RETFoundLinearProbe(
-            backbone=backbone,
-            embed_dim=embed_dim,
-            lr=args.lr,
-            class_weights=class_weights,
-        )
-    elif args.retfound_mode == "finetune":
-        full = RETFoundClassifier(num_classes=NUM_CLASSES)
-        model = RETFoundFineTune(
-            model=full,
-            lr=args.lr,
-            class_weights=class_weights,
-        )
-    else:
-        raise ValueError("Invalid mode")
+    dm.setup()
 
-    # Callbacks
-    ckpt_cb = ModelCheckpoint(monitor="val/loss", mode="min", save_top_k=1)
-    early = EarlyStopping(monitor="val/loss", patience=40, mode="min")
+    # 2. Setup Model
+    model = RETFoundTask(
+        mode=args.retfound_mode, 
+        lr=args.lr, 
+        checkpoint_path=args.checkpoint,
+        class_weights=class_weights
+    )
+
+    # 3. Trainer
+    ckpt_cb = ModelCheckpoint(monitor="val/f1", mode="max", save_top_k=1, filename=f"retfound_{args.retfound_mode}_best")
+    early_cb = EarlyStopping(monitor="val/f1", patience=50, mode="max")
+    
+    logger = WandbLogger(project="retfound_unified", name=f"{args.retfound_mode}_{args.dataset}")
 
     trainer = pl.Trainer(
         max_epochs=args.epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
-        callbacks=[ckpt_cb, early],
-        logger=WandbLogger(project="retfound_training"),
+        precision="16-mixed",
+        callbacks=[ckpt_cb, early_cb],
+        logger=logger,
+        log_every_n_steps=5
     )
 
     trainer.fit(model, dm)
+    print(f"\n[✓] Training Complete. Best model: {ckpt_cb.best_model_path}")
