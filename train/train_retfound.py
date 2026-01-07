@@ -11,7 +11,7 @@ from config.constants import *
 from models.retfound import RETFoundBackbone
 from dataloader.idrid import IDRiDModule, compute_idrid_class_weights
 from dataloader.aptos import APTOSModule
-from optmizers.optmizer import warmup_cosine_optimizer
+from optimizers.optmizer import warmup_cosine_optimizer
 
 # -----------------------------------------------------------
 #  Module: RETFoundTask
@@ -103,7 +103,7 @@ class RETFoundTask(pl.LightningModule):
                 pass
             metric.reset()
 
-    def configure_optmizers(self):
+    def configure_optimizers(self):
         if self.mode == "linear":
             # Simple AdamW for Linear Probing
             return torch.optim.AdamW(self.head.parameters(), lr=self.hparams.lr, weight_decay=1e-4)
@@ -124,23 +124,16 @@ class RETFoundTask(pl.LightningModule):
 # -----------------------------------------------------------
 
 def run_train_retfound(args):
-    pl.seed_everything(42)
+    pl.seed_everything(args.seed or 42)
     
     # 1. Setup Data
     # Use standard resize for finetune, stronger augs for linear probing
+    from utils.transforms import train_transform_retfound_linear, train_transform_default
+
     if args.retfound_mode == "linear":
-        tfm = transforms.Compose([
-            transforms.Resize(int(IMG_SIZE * 1.15)),
-            transforms.RandomResizedCrop(IMG_SIZE, scale=(0.8, 1.0)),
-            transforms.RandomHorizontalFlip(),
-            transforms.ColorJitter(0.3, 0.3, 0.3, 0.1),
-            transforms.ToTensor(),
-        ])
+        tfm = train_transform_retfound_linear(IMG_SIZE)
     else:
-        tfm = transforms.Compose([
-            transforms.Resize((IMG_SIZE, IMG_SIZE)),
-            transforms.ToTensor(),
-        ])
+        tfm = train_transform_default(IMG_SIZE)
 
     if args.dataset == "idrid":
         dm = IDRiDModule(root=IDRID_PATH, transform=tfm, batch_size=BATCH_SIZE)
@@ -164,7 +157,9 @@ def run_train_retfound(args):
     ckpt_cb = ModelCheckpoint(monitor="val/f1", mode="max", save_top_k=1, filename=f"retfound_{args.retfound_mode}_best")
     early_cb = EarlyStopping(monitor="val/f1", patience=50, mode="max")
     
-    logger = WandbLogger(project="retfound_unified", name=f"{args.retfound_mode}_{args.dataset}")
+    import time
+    run_name = f"retfound_{args.retfound_mode}_{args.dataset}_{int(time.time())}"
+    logger = WandbLogger(project="retfound_unified", name=run_name)
 
     trainer = pl.Trainer(
         max_epochs=args.epochs,
@@ -178,3 +173,34 @@ def run_train_retfound(args):
 
     trainer.fit(model, dm)
     print(f"\n[✓] Training Complete. Best model: {ckpt_cb.best_model_path}")
+
+    # load best checkpoint into model and compute metrics on train & val
+    try:
+        best_ckpt = torch.load(ckpt_cb.best_model_path, map_location="cpu").get("state_dict", {})
+        model.load_state_dict(best_ckpt, strict=False)
+        dm.setup()
+        train_dl = dm.train_dataloader()
+        val_dl = dm.val_dataloader()
+        val_metrics = trainer.validate(model, dataloaders=val_dl)
+        train_metrics = trainer.validate(model, dataloaders=train_dl)
+    except Exception:
+        val_metrics = []
+        train_metrics = []
+
+    try:
+        from utils.results import append_result
+        row = {
+            "timestamp": int(time.time()),
+            "mode": f"retfound_{args.retfound_mode}",
+            "dataset": args.dataset,
+            "model_path": ckpt_cb.best_model_path,
+            "run_name": run_name,
+            "seed": args.seed,
+            "monitor": ckpt_cb.monitor if hasattr(ckpt_cb, "monitor") else None,
+            "monitor_value": float(ckpt_cb.best_model_score) if getattr(ckpt_cb, "best_model_score", None) is not None else None,
+            "train_metrics": train_metrics[0] if train_metrics else {},
+            "val_metrics": val_metrics[0] if val_metrics else {},
+        }
+        append_result(row)
+    except Exception:
+        pass

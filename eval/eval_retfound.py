@@ -9,6 +9,7 @@ from dataloader.idrid import IDRiDModule
 from dataloader.aptos import APTOSModule
 from utils.flops import compute_flops
 from eval.shared_eval import EvalWrapper
+from utils.transforms import eval_transform
 
 def run_eval_retfound(args):
     print(f"\n=== RETFOUND EVALUATION: {args.load_model} ===")
@@ -17,10 +18,7 @@ def run_eval_retfound(args):
     model = RETFoundTask.load_from_checkpoint(args.load_model, strict=False)
     
     # 2. Setup Data
-    tfm = transforms.Compose([
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
-        transforms.ToTensor(),
-    ])
+    tfm = eval_transform(IMG_SIZE)
     
     if args.dataset == "idrid":
         dm = IDRiDModule(root=IDRID_PATH, transform=tfm, batch_size=BATCH_SIZE)

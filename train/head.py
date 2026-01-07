@@ -7,11 +7,12 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torchmetrics import Accuracy, F1Score, AUROC, AveragePrecision
 from torchvision import transforms
 
+from utils.transforms import eval_transform
 from config.constants import *
 from models.vmamba_backbone import VisualMamba
 from dataloader.idrid import IDRiDModule, compute_idrid_class_weights
 from dataloader.aptos import APTOSModule
-from optmizers.optmizer import warmup_cosine_optimizer
+from optimizers.optmizer import warmup_cosine_optimizer
 
 class VMambaHeadTask(pl.LightningModule):
     def __init__(self, backbone, lr, class_weights=None):
@@ -94,7 +95,7 @@ class VMambaHeadTask(pl.LightningModule):
             except: pass
             m.reset()
 
-    def configure_optmizers(self):
+    def configure_optimizers(self):
         params = list(self.head.parameters())
         if not FREEZE_BACKBONE:
             params += list(self.backbone.parameters())
@@ -114,7 +115,7 @@ class VMambaHeadTask(pl.LightningModule):
 # -----------------------------------------------------------
 
 def run_head_training(args):
-    pl.seed_everything(42)
+    pl.seed_everything(args.seed or 42)
     print("\n=== PHASE II: VMAMBA HEAD TRAINING ===")
 
     # 1. Backbone Loading logic
@@ -131,7 +132,7 @@ def run_head_training(args):
     backbone.load_state_dict(new_state if new_state else state_dict, strict=False)
 
     # 2. Data & Weights
-    tfm = transforms.Compose([transforms.Resize((IMG_SIZE, IMG_SIZE)), transforms.ToTensor()])
+    tfm = eval_transform(IMG_SIZE)
     if args.dataset == "aptos":
         dm = APTOSModule(root=APTOS_PATH, transform=tfm, batch_size=BATCH_SIZE)
         class_weights = None
@@ -148,11 +149,13 @@ def run_head_training(args):
     ckpt_cb = ModelCheckpoint(monitor="val/f1", mode="max", save_top_k=1, filename="best_head")
     early_cb = EarlyStopping(monitor="val/f1", patience=100, mode="max")
 
+    import time
+    run_name = f"head_{args.dataset}_{int(time.time())}"
     trainer = pl.Trainer(
         max_epochs=HEAD_EPOCHS,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
-        logger=WandbLogger(project="vmamba_head_training"),
+        logger=WandbLogger(project="vmamba_head_training", name=run_name),
         precision="16-mixed",
         callbacks=[ckpt_cb, early_cb]
     )
@@ -162,10 +165,42 @@ def run_head_training(args):
     # 4. Final Save (Backbone + Head split)
     save_path = os.path.join(CHECKPOINT_DIR, "vmamba_final_head.pth")
     best_ckpt = torch.load(ckpt_cb.best_model_path)["state_dict"]
-    
+
     final_dict = {
         "backbone": {k.replace("backbone.", ""): v for k, v in best_ckpt.items() if k.startswith("backbone.")},
         "head": {k.replace("head.", ""): v for k, v in best_ckpt.items() if k.startswith("head.")}
     }
     torch.save(final_dict, save_path)
     print(f"[✓] Model saved to {save_path}")
+
+    # load best weights into model and compute metrics
+    try:
+        model.load_state_dict(best_ckpt, strict=False)
+        dm.setup()
+        train_dl = dm.train_dataloader()
+        val_dl = dm.val_dataloader()
+        val_metrics = trainer.validate(model, dataloaders=val_dl)
+        train_metrics = trainer.validate(model, dataloaders=train_dl)
+    except Exception:
+        val_metrics = []
+        train_metrics = []
+
+    # append to results csv
+    try:
+        from utils.results import append_result
+        import time
+        row = {
+            "timestamp": int(time.time()),
+            "mode": "head",
+            "dataset": args.dataset,
+            "model_path": ckpt_cb.best_model_path,
+            "run_name": run_name,
+            "seed": args.seed,
+            "monitor": ckpt_cb.monitor if hasattr(ckpt_cb, "monitor") else None,
+            "monitor_value": float(ckpt_cb.best_model_score) if getattr(ckpt_cb, "best_model_score", None) is not None else None,
+            "train_metrics": train_metrics[0] if train_metrics else {},
+            "val_metrics": val_metrics[0] if val_metrics else {},
+        }
+        append_result(row)
+    except Exception:
+        pass

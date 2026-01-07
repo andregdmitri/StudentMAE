@@ -1,4 +1,4 @@
-# optmizers/optimizer.py
+# optimizers/optimizer.py
 
 import math
 import torch

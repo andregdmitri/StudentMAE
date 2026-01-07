@@ -37,5 +37,5 @@ class BarlowTwins(pl.LightningModule):
 		self.log('barlow_twins_loss', loss)
 		return loss
 
-	def configure_optmizers(self):
+	def configure_optimizers(self):
 		return torch.optim.Adam(self.parameters(), lr=self.learning_rate)

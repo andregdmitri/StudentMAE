@@ -111,6 +111,9 @@ Examples:
                         choices=["idrid", "aptos"],
                         help="Dataset selection")
 
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducibility")
+
     # ----------------------------------------------------------------------
     # RETFOUND-SPECIFIC ARGUMENTS
     # ----------------------------------------------------------------------
