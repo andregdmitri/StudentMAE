@@ -12,7 +12,7 @@ from config.constants import *
 from models.vmamba_backbone import VisualMamba
 from dataloader.idrid import IDRiDModule, compute_idrid_class_weights
 from dataloader.aptos import APTOSModule
-from optimizers.optmizer import warmup_cosine_optimizer
+from optimizers.optimizer import warmup_cosine_optimizer
 
 class VMambaHeadTask(pl.LightningModule):
     def __init__(self, backbone, lr, class_weights=None):

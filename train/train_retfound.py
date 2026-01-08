@@ -11,7 +11,7 @@ from config.constants import *
 from models.retfound import RETFoundBackbone
 from dataloader.idrid import IDRiDModule, compute_idrid_class_weights
 from dataloader.aptos import APTOSModule
-from optimizers.optmizer import warmup_cosine_optimizer
+from optimizers.optimizer import warmup_cosine_optimizer
 
 # -----------------------------------------------------------
 #  Module: RETFoundTask

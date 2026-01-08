@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 from config.constants import *
-from optimizers.optmizer import warmup_cosine_optimizer
+from optimizers.optimizer import warmup_cosine_optimizer
 import math
 
 class DistillationModule(pl.LightningModule):

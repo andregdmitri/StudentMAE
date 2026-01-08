@@ -14,13 +14,13 @@ This README focuses on the CLI (`main.py`) and the actual project layout so you 
 - `models/` — `retfound.py`, `vmamba_backbone.py`, `dist.py`, `models_vit.py`
 - `train/` — `distill.py`, `head.py`, `train_retfound.py`
 - `eval/` — `eval_vmamba.py`, `eval_retfound.py`, `shared_eval.py`
-- `optimizers/` — `optmizer.py` (helper for warmup + cosine schedule)
+- `optimizers/` — `optimizer.py` (helper for warmup + cosine schedule)
 - `ssl/` — self-supervised baselines (BYOL, Barlow Twins, SwAV)
 - `utils/` — utilities (`flops.py`, `pos_embed.py`, etc.)
 - `imgs/`, `results/` — example outputs and CSVs
 - `requirements.txt`, `simple_test.ipynb`
 
-Note: The directory is named `optimizers/` and contains `optmizer.py` (both names contain small typos). The codebase imports `optimizers.optmizer` accordingly. If you rename this directory/file, update all imports.
+Note: The directory is named `optimizers/` and contains `optimizer.py` (both names contain small typos). The codebase imports `optimizers.optimizer` accordingly. If you rename this directory/file, update all imports.
 
 ---
 
@@ -139,7 +139,7 @@ pip install -r requirements.txt
 
 ## Known quirks & suggested small fixes
 
-- Directory/file spelling: `optimizers/optmizer.py` contains the warmup/cosine LR helper but both names contain typos. If you prefer `optimizers/optimizer.py`, I can rename the file and update imports across the repo.
+- Directory/file spelling: `optimizers/optimizer.py` contains the warmup/cosine LR helper but both names contain typos. If you prefer `optimizers/optimizer.py`, I can rename the file and update imports across the repo.
 - RETFound name compatibility: code currently exposes `RETFoundBackbone`. Older notebooks may expect `RETFoundClassifier`. Adding `RETFoundClassifier = RETFoundBackbone` in `models/retfound.py` is a minimal compatibility shim.
 
 ---
@@ -215,7 +215,7 @@ If you want, I can apply either or both fixes (rename optimizer module, add the 
    ## Notes & gotchas
 
    - `main.py` validates required args for each `--run` mode (e.g., `--load_model` for `--run eval`).
-   - `optimizers/optmizer.py` contains the warmup-cosine helper; the filename contains a small typo (`optmizer`) but imports across the codebase use that name consistently.
+   - `optimizers/optimizer.py` contains the warmup-cosine helper; the filename contains a small typo (`optimizer`) but imports across the codebase use that name consistently.
    - The RETFound wrapper used in the repo exposes the class `RETFoundBackbone` — older notebooks may reference `RETFoundClassifier`. If needed, an alias can be added to `models/retfound.py` for compatibility.
 
    ## Troubleshooting
@@ -224,7 +224,7 @@ If you want, I can apply either or both fixes (rename optimizer module, add the 
    - Missing checkpoints: set `CHECKPOINT_DIR` or pass full paths to `--load_model`/`--load_backbone`.
 
    If you want, I can:
-   - rename `optimizers/optmizer.py` -> `optimizer.py` and update imports,
+   - rename `optimizers/optimizer.py` -> `optimizer.py` and update imports,
    - add a backwards-compatible `RETFoundClassifier` alias in `models/retfound.py`, or
    - run a quick import smoke-check to verify the CLI entrypoints load.
 
