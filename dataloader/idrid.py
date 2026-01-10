@@ -7,6 +7,8 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
 from config.constants import BATCH_SIZE, NUM_WORKERS
+import numpy as np
+from sklearn.utils.class_weight import compute_class_weight
 
 class IDRiDDataset(Dataset):
     def __init__(self, root, split="train", transform=None):
@@ -81,3 +83,21 @@ class IDRiDModule(pl.LightningDataModule):
 
     def test_dataloader(self):
         return DataLoader(self.test_ds, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
+    
+def compute_idrid_class_weights(root):
+    """
+    Computes class weights for the training set to handle class imbalance.
+    """
+    csv_path = os.path.join(root, "2. Groundtruths/a. IDRiD_Disease Grading_Training Labels.csv")
+    if not os.path.exists(csv_path):
+        print(f"Warning: CSV not found at {csv_path}. Returning default weights.")
+        return torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0])
+
+    df = pd.read_csv(csv_path)
+    labels = df["Retinopathy grade"].values
+    classes = np.unique(labels)
+    
+    # Calculate weights: weight = total_samples / (n_classes * samples_per_class)
+    weights = compute_class_weight(class_weight='balanced', classes=classes, y=labels)
+    
+    return torch.tensor(weights, dtype=torch.float)

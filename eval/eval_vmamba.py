@@ -45,9 +45,9 @@ def run_evaluation(args):
     model = VMambaInference(backbone, head)
 
     # 3. Data & Trainer
-        tfm = eval_transform(IMG_SIZE)
-        dm = IDRiDModule(root=IDRID_PATH, transform=tfm, batch_size=BATCH_SIZE) if args.dataset == "idrid" \
-            else APTOSModule(root=APTOS_PATH, transform=tfm, batch_size=BATCH_SIZE)
+    tfm = eval_transform(IMG_SIZE)
+    dm = IDRiDModule(root=IDRID_PATH, transform=tfm, batch_size=BATCH_SIZE) if args.dataset == "idrid" \
+        else APTOSModule(root=APTOS_PATH, transform=tfm, batch_size=BATCH_SIZE)
     dm.setup(stage="validate")
 
     trainer = pl.Trainer(
